@@ -1,0 +1,27 @@
+2024-11-10 17:09:16,085 - INFO - Conexión exitosa con Binance
+2024-11-10 19:23:14,509 - INFO - Conexión exitosa con Binance
+2024-11-10 19:23:18,454 - INFO - Conexión exitosa con Binance
+2024-11-10 19:24:45,379 - INFO - Conexión exitosa con Binance
+2024-11-10 19:37:33,385 - INFO - Conexión exitosa con Binance
+2024-11-10 19:44:39,281 - INFO - Conexión exitosa con Binance
+2024-11-10 19:48:43,743 - INFO - Conexión exitosa con Binance
+2024-11-10 19:48:43,961 - ERROR - Error obteniendo balance: APIError(code=-2014): API-key format invalid.
+2024-11-10 19:49:16,350 - INFO - Conexión exitosa con Binance
+2024-11-10 19:51:09,116 - INFO - Conexión exitosa con Binance
+2024-11-10 19:51:24,736 - INFO - Conexión exitosa con Binance
+2024-11-10 19:52:41,160 - INFO - Conexión exitosa con Binance
+2024-11-10 19:53:32,240 - INFO - Conexión exitosa con Binance
+2024-11-10 19:54:18,949 - INFO - Conexión exitosa con Binance
+2024-11-10 19:54:19,166 - ERROR - Error obteniendo balance: APIError(code=-2014): API-key format invalid.
+2024-11-10 19:55:21,837 - INFO - Conexión exitosa con Binance
+2024-11-10 19:55:22,055 - ERROR - Error obteniendo balance: APIError(code=-2014): API-key format invalid.
+2024-11-10 20:03:40,820 - INFO - Conexión exitosa con Binance
+2024-11-10 20:05:00,353 - INFO - Conexión exitosa con Binance
+2024-11-10 20:12:56,858 - INFO - Conexión exitosa con Binance
+2024-11-10 20:12:57,297 - ERROR - Error: API key con formato inválido
+2024-11-10 20:18:25,080 - INFO - Conexión exitosa con Binance
+2024-11-10 20:18:25,517 - ERROR - Error: API key con formato inválido
+2024-11-10 20:19:47,055 - INFO - Conexión exitosa con Binance
+2024-11-10 20:19:47,489 - ERROR - Error: API key con formato inválido
+2024-11-11 11:30:17,347 - INFO - Conexión exitosa con Binance
+2024-11-11 11:30:17,803 - ERROR - Error: API key con formato inválido
