@@ -9,17 +9,18 @@ import os
 from decimal import Decimal, ROUND_DOWN
 import math
 
+
 class TradingBot:
     def __init__(self):
-        self.api_key = 'TU_API_KEY'
-        self.api_secret = 'TU_API_SECRET'
+        self.api_key = "TU_API_KEY"
+        self.api_secret = "TU_API_SECRET"
 
         # Inicializar el cliente de Binance
         self.client = Client(self.api_key, self.api_secret)
 
         # Configuración básica
-        self.pairs = ['BTCUSDT', 'ADAUSDT', 'SHIBUSDT']
-        self.timeframe = '1h'
+        self.pairs = ["BTCUSDT", "ADAUSDT", "SHIBUSDT"]
+        self.timeframe = "1h"
         self.stop_loss_percent = 0.05
 
         # Configuración de trading
@@ -29,14 +30,14 @@ class TradingBot:
         self.enable_trading = False
 
         # Crear carpeta de datos si no existe
-        if not os.path.exists('data'):
-            os.makedirs('data')
+        if not os.path.exists("data"):
+            os.makedirs("data")
 
         # Configuración de logging
         logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            filename='trading_bot.log'
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            filename="trading_bot.log",
         )
         self.logger = logging.getLogger(__name__)
 
@@ -55,13 +56,13 @@ class TradingBot:
             if balance is not None:
                 print("✅ Acceso a balance: OK")
                 for b in balance:
-                    if float(b['free']) > 0:
+                    if float(b["free"]) > 0:
                         print(f"   {b['asset']}: {b['free']}")
             else:
                 print("❌ Acceso a balance: Error")
 
             # Prueba obtener precios
-            price = self.get_current_price('BTCUSDT')
+            price = self.get_current_price("BTCUSDT")
             if price:
                 print(f"✅ Acceso a precios: OK (BTC: ${price})")
             else:
@@ -102,10 +103,12 @@ class TradingBot:
                 return None
 
             # Obtenemos los balances
-            balances = account['balances']
+            balances = account["balances"]
 
             # Filtramos solo los balances con valor
-            non_zero = [b for b in balances if float(b['free']) > 0 or float(b['locked']) > 0]
+            non_zero = [
+                b for b in balances if float(b["free"]) > 0 or float(b["locked"]) > 0
+            ]
 
             if not non_zero:
                 self.logger.info("No se encontraron balances con valor")
@@ -130,36 +133,48 @@ class TradingBot:
         """
         try:
             ticker = self.client.get_symbol_ticker(symbol=symbol)
-            return float(ticker['price'])
+            return float(ticker["price"])
         except Exception as e:
             self.logger.error(f"Error obteniendo precio para {symbol}: {str(e)}")
             return None
 
-    def get_historical_data(self, symbol, interval='1h', limit=500):
+    def get_historical_data(self, symbol, interval="1h", limit=500):
         """
         Obtiene datos históricos de un par
         """
         try:
             klines = self.client.get_historical_klines(
-                symbol=symbol,
-                interval=interval,
-                limit=limit
+                symbol=symbol, interval=interval, limit=limit
             )
 
-            df = pd.DataFrame(klines, columns=[
-                'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                'close_time', 'quote_volume', 'trades', 'taker_buy_base',
-                'taker_buy_quote', 'ignore'
-            ])
+            df = pd.DataFrame(
+                klines,
+                columns=[
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "close_time",
+                    "quote_volume",
+                    "trades",
+                    "taker_buy_base",
+                    "taker_buy_quote",
+                    "ignore",
+                ],
+            )
 
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            for col in ["open", "high", "low", "close", "volume"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
             return df
 
         except Exception as e:
-            self.logger.error(f"Error obteniendo datos históricos para {symbol}: {str(e)}")
+            self.logger.error(
+                f"Error obteniendo datos históricos para {symbol}: {str(e)}"
+            )
             return None
 
     def calculate_indicators(self, df):
@@ -167,7 +182,7 @@ class TradingBot:
         Calcula los indicadores técnicos principales
         """
         try:
-            prices = df['close'].values
+            prices = df["close"].values
 
             # RSI
             delta = np.diff(prices)
@@ -182,29 +197,29 @@ class TradingBot:
             avg_loss[14] = np.mean(loss[:14])
 
             for i in range(15, len(prices)):
-                avg_gain[i] = (avg_gain[i-1] * 13 + gain[i-1]) / 14
-                avg_loss[i] = (avg_loss[i-1] * 13 + loss[i-1]) / 14
+                avg_gain[i] = (avg_gain[i - 1] * 13 + gain[i - 1]) / 14
+                avg_loss[i] = (avg_loss[i - 1] * 13 + loss[i - 1]) / 14
 
             rs = avg_gain[14:] / avg_loss[14:]
             rsi = 100 - (100 / (1 + rs))
-            df['RSI'] = np.pad(rsi, (14, 0), mode='constant', constant_values=np.nan)
+            df["RSI"] = np.pad(rsi, (14, 0), mode="constant", constant_values=np.nan)
 
             # MACD
-            exp1 = df['close'].ewm(span=12, adjust=False).mean()
-            exp2 = df['close'].ewm(span=26, adjust=False).mean()
-            df['MACD'] = exp1 - exp2
-            df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
-            df['MACD_Histogram'] = df['MACD'] - df['Signal_Line']
+            exp1 = df["close"].ewm(span=12, adjust=False).mean()
+            exp2 = df["close"].ewm(span=26, adjust=False).mean()
+            df["MACD"] = exp1 - exp2
+            df["Signal_Line"] = df["MACD"].ewm(span=9, adjust=False).mean()
+            df["MACD_Histogram"] = df["MACD"] - df["Signal_Line"]
 
             # Bollinger Bands
-            df['BB_middle'] = df['close'].rolling(window=20).mean()
-            bb_std = df['close'].rolling(window=20).std()
-            df['BB_upper'] = df['BB_middle'] + (bb_std * 2)
-            df['BB_lower'] = df['BB_middle'] - (bb_std * 2)
+            df["BB_middle"] = df["close"].rolling(window=20).mean()
+            bb_std = df["close"].rolling(window=20).std()
+            df["BB_upper"] = df["BB_middle"] + (bb_std * 2)
+            df["BB_lower"] = df["BB_middle"] - (bb_std * 2)
 
             # Moving Averages
-            df['SMA_50'] = df['close'].rolling(window=50).mean()
-            df['EMA_50'] = df['close'].ewm(span=50, adjust=False).mean()
+            df["SMA_50"] = df["close"].rolling(window=50).mean()
+            df["EMA_50"] = df["close"].ewm(span=50, adjust=False).mean()
 
             return df
 
@@ -218,38 +233,38 @@ class TradingBot:
         """
         try:
             signals = pd.DataFrame(index=df.index)
-            signals['signal'] = 0
+            signals["signal"] = 0
 
             # Señales RSI
-            signals.loc[df['RSI'] < 30, 'RSI_signal'] = 1
-            signals.loc[df['RSI'] > 70, 'RSI_signal'] = -1
+            signals.loc[df["RSI"] < 30, "RSI_signal"] = 1
+            signals.loc[df["RSI"] > 70, "RSI_signal"] = -1
 
             # Señales MACD
-            signals.loc[df['MACD'] > df['Signal_Line'], 'MACD_signal'] = 1
-            signals.loc[df['MACD'] < df['Signal_Line'], 'MACD_signal'] = -1
+            signals.loc[df["MACD"] > df["Signal_Line"], "MACD_signal"] = 1
+            signals.loc[df["MACD"] < df["Signal_Line"], "MACD_signal"] = -1
 
             # Señales Bollinger Bands
-            signals.loc[df['close'] < df['BB_lower'], 'BB_signal'] = 1
-            signals.loc[df['close'] > df['BB_upper'], 'BB_signal'] = -1
+            signals.loc[df["close"] < df["BB_lower"], "BB_signal"] = 1
+            signals.loc[df["close"] > df["BB_upper"], "BB_signal"] = -1
 
             # Señales Moving Averages
-            signals.loc[df['SMA_50'] > df['EMA_50'], 'MA_signal'] = 1
-            signals.loc[df['SMA_50'] < df['EMA_50'], 'MA_signal'] = -1
+            signals.loc[df["SMA_50"] > df["EMA_50"], "MA_signal"] = 1
+            signals.loc[df["SMA_50"] < df["EMA_50"], "MA_signal"] = -1
 
             # Señal combinada
             buy_conditions = (
-                (signals['RSI_signal'] == 1) &
-                (signals['MACD_signal'] == 1) &
-                ((signals['BB_signal'] == 1) | (signals['MA_signal'] == 1))
+                (signals["RSI_signal"] == 1)
+                & (signals["MACD_signal"] == 1)
+                & ((signals["BB_signal"] == 1) | (signals["MA_signal"] == 1))
             )
             sell_conditions = (
-                (signals['RSI_signal'] == -1) &
-                (signals['MACD_signal'] == -1) &
-                ((signals['BB_signal'] == -1) | (signals['MA_signal'] == -1))
+                (signals["RSI_signal"] == -1)
+                & (signals["MACD_signal"] == -1)
+                & ((signals["BB_signal"] == -1) | (signals["MA_signal"] == -1))
             )
 
-            signals.loc[buy_conditions, 'signal'] = 1
-            signals.loc[sell_conditions, 'signal'] = -1
+            signals.loc[buy_conditions, "signal"] = 1
+            signals.loc[sell_conditions, "signal"] = -1
 
             return signals
 
@@ -277,17 +292,18 @@ class TradingBot:
             analysis = pd.concat([df, signals], axis=1)
             analysis.to_csv(f"data/{symbol.lower()}_analysis.csv")
 
-            last_signal = signals['signal'].iloc[-1]
+            last_signal = signals["signal"].iloc[-1]
             current_price = self.get_current_price(symbol)
 
             return {
-                'symbol': symbol,
-                'current_price': current_price,
-                'signal': last_signal,
-                'RSI': df['RSI'].iloc[-1],
-                'MACD': df['MACD'].iloc[-1],
-                'BB_position': (df['close'].iloc[-1] - df['BB_lower'].iloc[-1]) /
-                              (df['BB_upper'].iloc[-1] - df['BB_lower'].iloc[-1]) * 100
+                "symbol": symbol,
+                "current_price": current_price,
+                "signal": last_signal,
+                "RSI": df["RSI"].iloc[-1],
+                "MACD": df["MACD"].iloc[-1],
+                "BB_position": (df["close"].iloc[-1] - df["BB_lower"].iloc[-1])
+                / (df["BB_upper"].iloc[-1] - df["BB_lower"].iloc[-1])
+                * 100,
             }
 
         except Exception as e:
@@ -302,11 +318,11 @@ class TradingBot:
             info = self.client.get_symbol_info(symbol)
             if info:
                 return {
-                    'min_qty': float(info['filters'][2]['minQty']),
-                    'step_size': float(info['filters'][2]['stepSize']),
-                    'min_notional': float(info['filters'][3]['minNotional']),
-                    'price_precision': info['quotePrecision'],
-                    'quantity_precision': info['baseAssetPrecision']
+                    "min_qty": float(info["filters"][2]["minQty"]),
+                    "step_size": float(info["filters"][2]["stepSize"]),
+                    "min_notional": float(info["filters"][3]["minNotional"]),
+                    "price_precision": info["quotePrecision"],
+                    "quantity_precision": info["baseAssetPrecision"],
                 }
             return None
         except Exception as e:
@@ -327,16 +343,22 @@ class TradingBot:
                 return None
 
             raw_quantity = usdt_amount / current_price
-            step_size = symbol_info['step_size']
+            step_size = symbol_info["step_size"]
             precision = int(round(-math.log10(step_size)))
-            quantity = float(Decimal(str(raw_quantity)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
+            quantity = float(
+                Decimal(str(raw_quantity)).quantize(
+                    Decimal(str(step_size)), rounding=ROUND_DOWN
+                )
+            )
 
-            if quantity < symbol_info['min_qty']:
+            if quantity < symbol_info["min_qty"]:
                 self.logger.warning(f"Cantidad menor al mínimo permitido para {symbol}")
                 return None
 
-            if quantity * current_price < symbol_info['min_notional']:
-                self.logger.warning(f"Valor total menor al mínimo permitido para {symbol}")
+            if quantity * current_price < symbol_info["min_notional"]:
+                self.logger.warning(
+                    f"Valor total menor al mínimo permitido para {symbol}"
+                )
                 return None
 
             return quantity
@@ -355,10 +377,7 @@ class TradingBot:
 
         try:
             order = self.client.create_order(
-                symbol=symbol,
-                side=side,
-                type='MARKET',
-                quantity=quantity
+                symbol=symbol, side=side, type="MARKET", quantity=quantity
             )
 
             self.logger.info(f"Orden ejecutada: {symbol} {side} {quantity}")
@@ -367,7 +386,6 @@ class TradingBot:
         except Exception as e:
             self.logger.error(f"Error colocando orden: {str(e)}")
             return None
-
 
     def execute_trade_strategy(self, symbol, analysis):
         """
@@ -384,7 +402,7 @@ class TradingBot:
                 return None
 
             # 2. Verificar señal actual
-            signal = analysis['signal']
+            signal = analysis["signal"]
             if signal == 0:
                 return None
 
@@ -400,20 +418,22 @@ class TradingBot:
             if signal == 1:  # Señal de compra
                 # Calcular stop loss y take profit
                 stop_loss_price = current_price * (1 - self.stop_loss_percent)
-                take_profit_price = current_price * (1 + (self.stop_loss_percent * 1.5))  # 1.5x el riesgo
+                take_profit_price = current_price * (
+                    1 + (self.stop_loss_percent * 1.5)
+                )  # 1.5x el riesgo
 
                 # Colocar orden de compra
-                order = self.place_market_order(symbol, 'BUY', quantity)
+                order = self.place_market_order(symbol, "BUY", quantity)
                 if order:
                     # Colocar órdenes de stop loss y take profit
                     self.place_stop_loss_order(symbol, quantity, stop_loss_price)
                     self.place_take_profit_order(symbol, quantity, take_profit_price)
-                    self.register_trade(symbol, 'BUY', quantity, order['price'])
+                    self.register_trade(symbol, "BUY", quantity, order["price"])
 
             elif signal == -1:  # Señal de venta
-                order = self.place_market_order(symbol, 'SELL', quantity)
+                order = self.place_market_order(symbol, "SELL", quantity)
                 if order:
-                    self.register_trade(symbol, 'SELL', quantity, order['price'])
+                    self.register_trade(symbol, "SELL", quantity, order["price"])
 
             return order
 
@@ -421,30 +441,32 @@ class TradingBot:
             self.logger.error(f"Error ejecutando estrategia: {str(e)}")
             return None
 
-
     def register_trade(self, symbol, side, quantity, price):
         """
         Registra los trades ejecutados
         """
         try:
             trade_info = {
-                'symbol': symbol,
-                'side': side,
-                'quantity': quantity,
-                'price': price,
-                'timestamp': datetime.now().isoformat(),
-                'value': quantity * price
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "price": price,
+                "timestamp": datetime.now().isoformat(),
+                "value": quantity * price,
             }
 
             # Guardar en archivo CSV
             df = pd.DataFrame([trade_info])
-            df.to_csv(f"data/trades_{symbol.lower()}.csv",
-                     mode='a',
-                     header=not os.path.exists(f"data/trades_{symbol.lower()}.csv"),
-                     index=False)
+            df.to_csv(
+                f"data/trades_{symbol.lower()}.csv",
+                mode="a",
+                header=not os.path.exists(f"data/trades_{symbol.lower()}.csv"),
+                index=False,
+            )
 
         except Exception as e:
             self.logger.error(f"Error registrando trade: {str(e)}")
+
 
 if __name__ == "__main__":
     bot = TradingBot()
@@ -453,7 +475,9 @@ if __name__ == "__main__":
         print("\n=== Verificando configuración de API ===")
         bot.verify_api_permissions()
         print("\n=== Configuración del Bot ===")
-        print("Trading automático:", "ACTIVADO" if bot.enable_trading else "DESACTIVADO")
+        print(
+            "Trading automático:", "ACTIVADO" if bot.enable_trading else "DESACTIVADO"
+        )
         print(f"Pares configurados: {', '.join(bot.pairs)}")
         print(f"Cantidad por operación: {bot.trade_amount} USDT")
         print(f"Stop Loss: {bot.stop_loss_percent * 100}%")
@@ -463,12 +487,12 @@ if __name__ == "__main__":
         if balance:
             print("\nBalance inicial:")
             for b in balance:
-                if float(b['free']) > 0:
+                if float(b["free"]) > 0:
                     print(f"{b['asset']}: {b['free']}")
         else:
             print("\nNo se pudo obtener el balance.")
             respuesta = input("¿Deseas continuar en modo monitoreo solamente? (s/n): ")
-            if respuesta.lower() != 's':
+            if respuesta.lower() != "s":
                 print("Deteniendo el bot...")
                 exit()
 
@@ -479,20 +503,24 @@ if __name__ == "__main__":
                     analysis = bot.analyze_market(pair)
                     if analysis:
                         print(f"\n{'='*50}")
-                        print(f"Análisis para {pair} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        print(
+                            f"Análisis para {pair} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
                         print(f"{'='*50}")
                         print(f"Precio actual: ${analysis['current_price']:.8f}")
 
                         signal_text = "MANTENER"
-                        if analysis['signal'] == 1:
+                        if analysis["signal"] == 1:
                             signal_text = "🟢 COMPRA"
-                        elif analysis['signal'] == -1:
+                        elif analysis["signal"] == -1:
                             signal_text = "🔴 VENTA"
                         print(f"Señal: {signal_text}")
 
                         print(f"RSI: {analysis['RSI']:.2f}")
                         print(f"MACD: {analysis['MACD']:.8f}")
-                        print(f"Posición en Bandas de Bollinger: {analysis['BB_position']:.2f}%")
+                        print(
+                            f"Posición en Bandas de Bollinger: {analysis['BB_position']:.2f}%"
+                        )
 
                         if bot.enable_trading:
                             print("\nEjecutando estrategia de trading...")
@@ -520,8 +548,8 @@ if __name__ == "__main__":
             positions = self.get_open_positions()
 
             for pos in positions:
-                current_price = self.get_current_price(pos['symbol'])
-                entry_price = float(pos['entry_price'])
+                current_price = self.get_current_price(pos["symbol"])
+                entry_price = float(pos["entry_price"])
                 pnl_percent = ((current_price - entry_price) / entry_price) * 100
 
                 print(f"\n{pos['symbol']}:")
@@ -532,7 +560,7 @@ if __name__ == "__main__":
                 # Verificar stop loss
                 if pnl_percent <= -self.stop_loss_percent:
                     print("¡Stop Loss alcanzado! Cerrando posición...")
-                    self.close_position(pos['symbol'], pos['quantity'])
+                    self.close_position(pos["symbol"], pos["quantity"])
 
         except Exception as e:
             self.logger.error(f"Error monitoreando posiciones: {str(e)}")
