@@ -1,29 +1,37 @@
-# config.py
 from dotenv import load_dotenv
 import os
-
-# Cargar variables de entorno desde el archivo .env
-load_dotenv()
+from typing import Dict
 
 
 class Config:
-    CMC_API_KEY = os.getenv("CMC_API_KEY")
-    # Aquí puedes agregar más API keys en el futuro
-    GATE_IO_API_KEY = os.getenv("GATE_IO_API_KEY")
-    GATE_IO_API_SECRET = os.getenv("GATE_IO_API_SECRET")
+    def __init__(self):
+        load_dotenv()
+        self._load_credentials()
+        self._load_trading_config()
 
+    def _load_credentials(self):
+        self.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+        self.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
+        self.TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+        self.TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+        self.TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER")
+        self.ALERT_TO_NUMBER = os.getenv("ALERT_TO_NUMBER")
 
-# main.py
-from config import Config
-from crypto_market_analyzer import CryptoMarketAnalyzer
+        if not self.BINANCE_API_KEY or not self.BINANCE_API_SECRET:
+            raise ValueError("Binance credentials not found in environment variables")
 
+    def _load_trading_config(self):
+        self.TRADING_CONFIG: Dict = {
+            "default_symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT"],
+            "intervals": {
+                "klines": "4h",
+                "analysis": "1h"
+            },
+            "limits": {
+                "klines": 120,
+                "volume": 500000,
+                "trades": 2000
+            }
+        }
 
-def main():
-    # Inicializar el analizador con la API key
-    analyzer = CryptoMarketAnalyzer(Config.CMC_API_KEY)
-    analysis = analyzer.generate_complete_analysis()
-    print_complete_analysis(analysis)
-
-
-if __name__ == "__main__":
-    main()
+config = Config()

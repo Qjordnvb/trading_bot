@@ -1,566 +1,260 @@
-import pandas as pd
-import numpy as np
-from binance.client import Client
-from datetime import datetime, timedelta
-import time
-import logging
-import json
-import os
-from decimal import Decimal, ROUND_DOWN
-import math
-
+# trading_bot.py
+from datetime import datetime
+from typing import Optional, Dict, List
+from config import config
+from core.binance_client import BinanceClient
+from core.market_analyzer import MarketAnalyzer
+from core.meme_analyzer import MemeCoinAnalyzer
+from alerts.alert_manager import AlertManager
+from alerts.notifications import WhatsAppNotifier, MockNotifier
+from monitor.market_monitor import MarketMonitor
+from utils.console_colors import ConsoleColors
 
 class TradingBot:
     def __init__(self):
-        self.api_key = "TU_API_KEY"
-        self.api_secret = "TU_API_SECRET"
+        self.client = self._initialize_client()
+        self.alert_manager = self._initialize_alert_system()
+        self.market_analyzer = MarketAnalyzer(self.client, self.alert_manager)
+        self.meme_analyzer = MemeCoinAnalyzer(self.client, self.market_analyzer)
+        self.market_monitor = MarketMonitor(self.client, self.alert_manager)
+        self.symbols_to_monitor = config.TRADING_CONFIG["default_symbols"]
+        self.meme_coins: List[Dict] = []
 
-        # Inicializar el cliente de Binance
-        self.client = Client(self.api_key, self.api_secret)
 
-        # Configuración básica
-        self.pairs = ["BTCUSDT", "ADAUSDT", "SHIBUSDT"]
-        self.timeframe = "1h"
-        self.stop_loss_percent = 0.05
+    def _initialize_client(self) -> BinanceClient:
+        return BinanceClient(config.BINANCE_API_KEY, config.BINANCE_API_SECRET)
 
-        # Configuración de trading
-        self.trade_amount = 20
-        self.max_trades = 3
-        self.min_profit = 1.5
-        self.enable_trading = False
-
-        # Crear carpeta de datos si no existe
-        if not os.path.exists("data"):
-            os.makedirs("data")
-
-        # Configuración de logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s - %(message)s",
-            filename="trading_bot.log",
-        )
-        self.logger = logging.getLogger(__name__)
-
-    def verify_api_permissions(self):
-        """
-        Verifica los permisos de la API
-        """
+    def _initialize_alert_system(self) -> Optional[AlertManager]:
         try:
-            # Prueba lectura básica
-            status = self.client.get_account_status()
-            if status:
-                print("✅ Permiso de lectura: OK")
-
-            # Prueba obtener balance
-            balance = self.get_account_balance()
-            if balance is not None:
-                print("✅ Acceso a balance: OK")
-                for b in balance:
-                    if float(b["free"]) > 0:
-                        print(f"   {b['asset']}: {b['free']}")
+            if all([config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN,
+                    config.TWILIO_FROM_NUMBER, config.ALERT_TO_NUMBER]):
+                notifier = WhatsAppNotifier(
+                    config.TWILIO_ACCOUNT_SID,
+                    config.TWILIO_AUTH_TOKEN,
+                    config.TWILIO_FROM_NUMBER,
+                    config.ALERT_TO_NUMBER
+                )
+                print(ConsoleColors.success("✓ Sistema de alertas inicializado con WhatsApp"))
             else:
-                print("❌ Acceso a balance: Error")
+                print(ConsoleColors.warning("⚠️ Usando notificador de prueba"))
+                notifier = MockNotifier()
 
-            # Prueba obtener precios
-            price = self.get_current_price("BTCUSDT")
-            if price:
-                print(f"✅ Acceso a precios: OK (BTC: ${price})")
-            else:
-                print("❌ Acceso a precios: Error")
-
+            return AlertManager(notifier)
         except Exception as e:
-            error_msg = str(e)
-            if "API-key format invalid" in error_msg:
-                print("❌ Error: Formato de API key inválido")
-            elif "Invalid API-key, IP, or permissions for action" in error_msg:
-                print("❌ Error: API key inválida o sin permisos suficientes")
-            elif "Timestamp for this request" in error_msg:
-                print("❌ Error: Problema de sincronización de tiempo")
-            else:
-                print(f"❌ Error desconocido: {error_msg}")
-
-    def test_connection(self):
-        """
-        Prueba la conexión con Binance
-        """
-        try:
-            self.client.ping()
-            self.logger.info("Conexión exitosa con Binance")
-            return True
-        except Exception as e:
-            self.logger.error(f"Error de conexión: {str(e)}")
-            return False
-
-    def get_account_balance(self):
-        """
-        Obtiene el balance de la cuenta
-        """
-        try:
-            # Primero verificamos que la API tenga los permisos correctos
-            account = self.client.get_account()
-            if not account:
-                self.logger.error("No se pudo obtener la información de la cuenta")
-                return None
-
-            # Obtenemos los balances
-            balances = account["balances"]
-
-            # Filtramos solo los balances con valor
-            non_zero = [
-                b for b in balances if float(b["free"]) > 0 or float(b["locked"]) > 0
-            ]
-
-            if not non_zero:
-                self.logger.info("No se encontraron balances con valor")
-
-            return non_zero
-
-        except Exception as e:
-            error_msg = str(e)
-            if "API-key format invalid" in error_msg:
-                self.logger.error("Error: API key con formato inválido")
-            elif "Invalid API-key, IP, or permissions for action" in error_msg:
-                self.logger.error("Error: API key inválida o sin permisos suficientes")
-            elif "Timestamp for this request" in error_msg:
-                self.logger.error("Error: Problema de sincronización de tiempo")
-            else:
-                self.logger.error(f"Error obteniendo balance: {error_msg}")
+            print(ConsoleColors.error(f"Error inicializando sistema de alertas: {str(e)}"))
             return None
 
-    def get_current_price(self, symbol):
-        """
-        Obtiene el precio actual de un par
-        """
+    def run(self):
+        print(ConsoleColors.header("\n=== ANÁLISIS DE MERCADO CRYPTO ==="))
+        print(ConsoleColors.info("Fecha y hora: ") +
+              ConsoleColors.highlight(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
         try:
-            ticker = self.client.get_symbol_ticker(symbol=symbol)
-            return float(ticker["price"])
+            self._analyze_main_pairs()
+            self._analyze_meme_coins()
+            self._start_monitoring()
+        except KeyboardInterrupt:
+            print(ConsoleColors.warning("\nDetención manual del bot"))
         except Exception as e:
-            self.logger.error(f"Error obteniendo precio para {symbol}: {str(e)}")
-            return None
+            print(ConsoleColors.error(f"\nError en ejecución: {str(e)}"))
+            import traceback
+            print(ConsoleColors.error(traceback.format_exc()))
+        finally:
+            print(ConsoleColors.header("\n=== ANÁLISIS COMPLETADO ===\n"))
 
-    def get_historical_data(self, symbol, interval="1h", limit=500):
-        """
-        Obtiene datos históricos de un par
-        """
+    def _analyze_main_pairs(self):
+        print(ConsoleColors.header("\n=== ANÁLISIS DE PARES PRINCIPALES ==="))
+        for symbol in self.symbols_to_monitor:
+            self._analyze_symbol(symbol)
+
+    def _analyze_meme_coins(self):
+        print(ConsoleColors.header("\n=== ANÁLISIS DE MEME COINS ==="))
         try:
-            klines = self.client.get_historical_klines(
-                symbol=symbol, interval=interval, limit=limit
-            )
+            self.meme_coins = self.meme_analyzer.get_top_meme_coins()
+            if not self.meme_coins:
+                print(ConsoleColors.warning("\nNo se encontraron meme coins que cumplan los criterios"))
+                return
 
-            df = pd.DataFrame(
-                klines,
-                columns=[
-                    "timestamp",
-                    "open",
-                    "high",
-                    "low",
-                    "close",
-                    "volume",
-                    "close_time",
-                    "quote_volume",
-                    "trades",
-                    "taker_buy_base",
-                    "taker_buy_quote",
-                    "ignore",
-                ],
-            )
-
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-            for col in ["open", "high", "low", "close", "volume"]:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-
-            return df
-
+            print(ConsoleColors.success(f"\nSe encontraron {len(self.meme_coins)} meme coins prometedoras"))
+            for coin in self.meme_coins:
+                self._analyze_symbol(coin['symbol'])
         except Exception as e:
-            self.logger.error(
-                f"Error obteniendo datos históricos para {symbol}: {str(e)}"
-            )
-            return None
+            print(ConsoleColors.error(f"Error en análisis de meme coins: {str(e)}"))
 
-    def calculate_indicators(self, df):
-        """
-        Calcula los indicadores técnicos principales
-        """
+    def _analyze_symbol(self, symbol: str):
+        print(ConsoleColors.header(f"\n=== ANÁLISIS DE {symbol} ==="))
+
         try:
-            prices = df["close"].values
+            recommendation = self.market_analyzer.analyze_trading_opportunity(symbol)
+            timing = self.market_analyzer.analyze_entry_timing(symbol)
 
-            # RSI
-            delta = np.diff(prices)
-            gain = (delta * 0).copy()
-            loss = (delta * 0).copy()
-            gain[delta > 0] = delta[delta > 0]
-            loss[delta < 0] = -delta[delta < 0]
+            if recommendation:
+                self._print_trading_recommendation(recommendation, symbol)
+                if self.alert_manager:
+                    self._setup_price_alerts(symbol, recommendation, timing)
+                    if timing and timing.target_price:
+                        self._setup_timing_alerts(symbol, timing)
 
-            avg_gain = np.zeros_like(prices)
-            avg_loss = np.zeros_like(prices)
-            avg_gain[14] = np.mean(gain[:14])
-            avg_loss[14] = np.mean(loss[:14])
+            if timing:
+                self._print_timing_analysis(timing)
 
-            for i in range(15, len(prices)):
-                avg_gain[i] = (avg_gain[i - 1] * 13 + gain[i - 1]) / 14
-                avg_loss[i] = (avg_loss[i - 1] * 13 + loss[i - 1]) / 14
-
-            rs = avg_gain[14:] / avg_loss[14:]
-            rsi = 100 - (100 / (1 + rs))
-            df["RSI"] = np.pad(rsi, (14, 0), mode="constant", constant_values=np.nan)
-
-            # MACD
-            exp1 = df["close"].ewm(span=12, adjust=False).mean()
-            exp2 = df["close"].ewm(span=26, adjust=False).mean()
-            df["MACD"] = exp1 - exp2
-            df["Signal_Line"] = df["MACD"].ewm(span=9, adjust=False).mean()
-            df["MACD_Histogram"] = df["MACD"] - df["Signal_Line"]
-
-            # Bollinger Bands
-            df["BB_middle"] = df["close"].rolling(window=20).mean()
-            bb_std = df["close"].rolling(window=20).std()
-            df["BB_upper"] = df["BB_middle"] + (bb_std * 2)
-            df["BB_lower"] = df["BB_middle"] - (bb_std * 2)
-
-            # Moving Averages
-            df["SMA_50"] = df["close"].rolling(window=50).mean()
-            df["EMA_50"] = df["close"].ewm(span=50, adjust=False).mean()
-
-            return df
+            print("\n" + "="*50)
 
         except Exception as e:
-            self.logger.error(f"Error calculando indicadores: {str(e)}")
-            return None
+            print(ConsoleColors.error(f"Error analizando {symbol}: {str(e)}"))
 
-    def generate_signals(self, df):
-        """
-        Genera señales de trading basadas en los indicadores
-        """
+    def _print_trading_recommendation(self, recommendation, symbol: str):
+        current_data = self.client.get_ticker_24h(symbol)
+        last_price = float(current_data['lastPrice']) if current_data and 'lastPrice' in current_data else None
+
+        print(ConsoleColors.info("\nRecomendación de Trading:"))
+        print(ConsoleColors.highlight(f"Señal: {recommendation.signal.value}"))
+        print(ConsoleColors.highlight(f"Fuerza: {recommendation.strength.value}"))
+
+        if recommendation.reasons:
+            print(ConsoleColors.info("\nRazones:"))
+            for reason in recommendation.reasons:
+                print(ConsoleColors.success(f"• {reason}"))
+
+        if last_price:
+            print(ConsoleColors.info("\nNiveles de Precio:"))
+            print(ConsoleColors.highlight(f"Precio actual: ${last_price:.6f}"))
+            print(ConsoleColors.highlight(f"Entrada: ${recommendation.entry_price:,.6f}"))
+
+            loss_percentage = ((recommendation.stop_loss - recommendation.entry_price) /
+                             recommendation.entry_price * 100)
+            profit_percentage = ((recommendation.take_profit - recommendation.entry_price) /
+                               recommendation.entry_price * 100)
+
+            print(ConsoleColors.error(f"Stop Loss: ${recommendation.stop_loss:,.8f} ({loss_percentage:.2f}%)"))
+            print(ConsoleColors.success(f"Take Profit: ${recommendation.take_profit:,.8f} ({profit_percentage:.2f}%)"))
+
+    def _print_timing_analysis(self, timing):
+        print(ConsoleColors.info("\nAnálisis de Timing:"))
+        print(ConsoleColors.highlight(f"Recomendación: {timing.timing.value}"))
+        print(ConsoleColors.highlight(f"Timeframe: {timing.timeframe}"))
+        print(ConsoleColors.highlight(f"Confianza: {timing.confidence:.1%}"))
+
+        if timing.conditions:
+            print(ConsoleColors.info("\nCondiciones:"))
+            for condition in timing.conditions:
+                print(ConsoleColors.success(f"• {condition}"))
+
+    def _setup_price_alerts(self, symbol: str, recommendation, timing):
+        """Configure price alerts with comprehensive trading analysis"""
+        if not self.alert_manager:
+            return
+
         try:
-            signals = pd.DataFrame(index=df.index)
-            signals["signal"] = 0
+            # Get current market data
+            ticker_24h = self.client.get_ticker_24h(symbol)
+            market_metrics = self.client.calculate_market_metrics(symbol)
+            candlesticks = self.client.get_klines(symbol, interval='4h', limit=14)
 
-            # Señales RSI
-            signals.loc[df["RSI"] < 30, "RSI_signal"] = 1
-            signals.loc[df["RSI"] > 70, "RSI_signal"] = -1
+            # Basic price metrics
+            current_price = float(ticker_24h['lastPrice'])
+            volume_24h = float(ticker_24h['quoteVolume'])
+            change_24h = float(ticker_24h['priceChangePercent'])
 
-            # Señales MACD
-            signals.loc[df["MACD"] > df["Signal_Line"], "MACD_signal"] = 1
-            signals.loc[df["MACD"] < df["Signal_Line"], "MACD_signal"] = -1
+            # Calculate percentages and ratios
+            stop_loss_percent = ((recommendation.stop_loss - current_price) / current_price) * 100
+            take_profit_percent = ((recommendation.take_profit - current_price) / current_price) * 100
+            risk_reward_ratio = abs(take_profit_percent / stop_loss_percent) if stop_loss_percent != 0 else 0
 
-            # Señales Bollinger Bands
-            signals.loc[df["close"] < df["BB_lower"], "BB_signal"] = 1
-            signals.loc[df["close"] > df["BB_upper"], "BB_signal"] = -1
+            # Technical analysis
+            rsi = self.market_analyzer._calculate_rsi(candlesticks)
+            trend = self.market_analyzer._analyze_trend(candlesticks)
+            momentum = self.market_analyzer._analyze_momentum(candlesticks)
+            volatility = market_metrics.get('volatility_7d', 0)
 
-            # Señales Moving Averages
-            signals.loc[df["SMA_50"] > df["EMA_50"], "MA_signal"] = 1
-            signals.loc[df["SMA_50"] < df["EMA_50"], "MA_signal"] = -1
+            additional_info = {
+                # Trading Signal
+                'signal': recommendation.signal.value,
+                'strength': recommendation.strength.value,
+                'reasons': recommendation.reasons,
 
-            # Señal combinada
-            buy_conditions = (
-                (signals["RSI_signal"] == 1)
-                & (signals["MACD_signal"] == 1)
-                & ((signals["BB_signal"] == 1) | (signals["MA_signal"] == 1))
-            )
-            sell_conditions = (
-                (signals["RSI_signal"] == -1)
-                & (signals["MACD_signal"] == -1)
-                & ((signals["BB_signal"] == -1) | (signals["MA_signal"] == -1))
-            )
+                # Price Levels
+                'current_price': current_price,
+                'entry_price': recommendation.entry_price,
+                'stop_loss': recommendation.stop_loss,
+                'take_profit': recommendation.take_profit,
+                'stop_loss_percent': stop_loss_percent,
+                'take_profit_percent': take_profit_percent,
 
-            signals.loc[buy_conditions, "signal"] = 1
-            signals.loc[sell_conditions, "signal"] = -1
+                # Market Analysis
+                'change_24h': change_24h,
+                'volume_24h': volume_24h,
+                'volatility': volatility,
+                'trend': trend.value if trend else 'N/A',
+                'rsi': rsi,
+                'momentum': momentum['medium_term'] if isinstance(momentum, dict) else 0,
+                'risk_reward_ratio': risk_reward_ratio,
 
-            return signals
-
-        except Exception as e:
-            self.logger.error(f"Error generando señales: {str(e)}")
-            return None
-
-    def analyze_market(self, symbol):
-        """
-        Analiza el mercado y genera señales de trading
-        """
-        try:
-            df = self.get_historical_data(symbol)
-            if df is None:
-                return None
-
-            df = self.calculate_indicators(df)
-            if df is None:
-                return None
-
-            signals = self.generate_signals(df)
-            if signals is None:
-                return None
-
-            analysis = pd.concat([df, signals], axis=1)
-            analysis.to_csv(f"data/{symbol.lower()}_analysis.csv")
-
-            last_signal = signals["signal"].iloc[-1]
-            current_price = self.get_current_price(symbol)
-
-            return {
-                "symbol": symbol,
-                "current_price": current_price,
-                "signal": last_signal,
-                "RSI": df["RSI"].iloc[-1],
-                "MACD": df["MACD"].iloc[-1],
-                "BB_position": (df["close"].iloc[-1] - df["BB_lower"].iloc[-1])
-                / (df["BB_upper"].iloc[-1] - df["BB_lower"].iloc[-1])
-                * 100,
+                # Timing Analysis
+                'timing_recommendation': timing.timing.value,
+                'timeframe': timing.timeframe,
+                'confidence': timing.confidence * 100,
+                'conditions': timing.conditions,
             }
 
-        except Exception as e:
-            self.logger.error(f"Error en análisis de mercado para {symbol}: {str(e)}")
-            return None
+            # Set up alerts for both take profit and stop loss
+            self.alert_manager.add_price_alert(
+                symbol=symbol,
+                target_price=recommendation.take_profit,
+                current_price=current_price,
+                condition='above',
+                additional_info=additional_info
 
-    def get_symbol_info(self, symbol):
-        """
-        Obtiene información del par de trading
-        """
-        try:
-            info = self.client.get_symbol_info(symbol)
-            if info:
-                return {
-                    "min_qty": float(info["filters"][2]["minQty"]),
-                    "step_size": float(info["filters"][2]["stepSize"]),
-                    "min_notional": float(info["filters"][3]["minNotional"]),
-                    "price_precision": info["quotePrecision"],
-                    "quantity_precision": info["baseAssetPrecision"],
-                }
-            return None
-        except Exception as e:
-            self.logger.error(f"Error obteniendo info del par {symbol}: {str(e)}")
-            return None
-
-    def calculate_position_size(self, symbol, usdt_amount):
-        """
-        Calcula el tamaño correcto de la posición según las reglas del mercado
-        """
-        try:
-            symbol_info = self.get_symbol_info(symbol)
-            if not symbol_info:
-                return None
-
-            current_price = self.get_current_price(symbol)
-            if not current_price:
-                return None
-
-            raw_quantity = usdt_amount / current_price
-            step_size = symbol_info["step_size"]
-            precision = int(round(-math.log10(step_size)))
-            quantity = float(
-                Decimal(str(raw_quantity)).quantize(
-                    Decimal(str(step_size)), rounding=ROUND_DOWN
-                )
             )
 
-            if quantity < symbol_info["min_qty"]:
-                self.logger.warning(f"Cantidad menor al mínimo permitido para {symbol}")
-                return None
-
-            if quantity * current_price < symbol_info["min_notional"]:
-                self.logger.warning(
-                    f"Valor total menor al mínimo permitido para {symbol}"
-                )
-                return None
-
-            return quantity
-
-        except Exception as e:
-            self.logger.error(f"Error calculando tamaño de posición: {str(e)}")
-            return None
-
-    def place_market_order(self, symbol, side, quantity):
-        """
-        Coloca una orden de mercado
-        """
-        if not self.enable_trading:
-            self.logger.warning("Trading real está desactivado")
-            return None
-
-        try:
-            order = self.client.create_order(
-                symbol=symbol, side=side, type="MARKET", quantity=quantity
+            self.alert_manager.add_price_alert(
+                symbol=symbol,
+                target_price=recommendation.stop_loss,
+                current_price=current_price,
+                condition='below',
+                additional_info=additional_info
             )
 
-            self.logger.info(f"Orden ejecutada: {symbol} {side} {quantity}")
-            return order
-
         except Exception as e:
-            self.logger.error(f"Error colocando orden: {str(e)}")
-            return None
+            print(ConsoleColors.error(f"Error configurando alertas para {symbol}: {str(e)}"))
 
-    def execute_trade_strategy(self, symbol, analysis):
-        """
-        Ejecuta la estrategia de trading con verificaciones adicionales
-        """
+    def _setup_timing_alerts(self, symbol: str, timing):
+        """Configure timing-based alerts"""
+        if not self.alert_manager or not timing.target_price:
+            return
+
         try:
-            # 1. Verificaciones previas
-            if not self.verify_balance(symbol):
-                print(f"Balance insuficiente para operar {symbol}")
-                return None
+            # Get current market data
+            ticker_24h = self.client.get_ticker_24h(symbol)
+            market_metrics = self.client.calculate_market_metrics(symbol)
 
-            if self.check_open_orders(symbol):
-                print(f"Ya hay órdenes abiertas para {symbol}")
-                return None
+            current_price = float(ticker_24h['lastPrice'])
 
-            # 2. Verificar señal actual
-            signal = analysis["signal"]
-            if signal == 0:
-                return None
-
-            # 3. Calcular tamaño de la posición
-            quantity = self.calculate_position_size(symbol, self.trade_amount)
-            if not quantity:
-                return None
-
-            # 4. Obtener precio actual para cálculos
-            current_price = self.get_current_price(symbol)
-
-            # 5. Ejecutar orden según la señal
-            if signal == 1:  # Señal de compra
-                # Calcular stop loss y take profit
-                stop_loss_price = current_price * (1 - self.stop_loss_percent)
-                take_profit_price = current_price * (
-                    1 + (self.stop_loss_percent * 1.5)
-                )  # 1.5x el riesgo
-
-                # Colocar orden de compra
-                order = self.place_market_order(symbol, "BUY", quantity)
-                if order:
-                    # Colocar órdenes de stop loss y take profit
-                    self.place_stop_loss_order(symbol, quantity, stop_loss_price)
-                    self.place_take_profit_order(symbol, quantity, take_profit_price)
-                    self.register_trade(symbol, "BUY", quantity, order["price"])
-
-            elif signal == -1:  # Señal de venta
-                order = self.place_market_order(symbol, "SELL", quantity)
-                if order:
-                    self.register_trade(symbol, "SELL", quantity, order["price"])
-
-            return order
-
-        except Exception as e:
-            self.logger.error(f"Error ejecutando estrategia: {str(e)}")
-            return None
-
-    def register_trade(self, symbol, side, quantity, price):
-        """
-        Registra los trades ejecutados
-        """
-        try:
-            trade_info = {
-                "symbol": symbol,
-                "side": side,
-                "quantity": quantity,
-                "price": price,
-                "timestamp": datetime.now().isoformat(),
-                "value": quantity * price,
+            additional_info = {
+                'timing_recommendation': timing.timing.value,
+                'timeframe': timing.timeframe,
+                'confidence': timing.confidence * 100,
+                'conditions': timing.conditions if timing.conditions else [],
+                'volume_24h': float(ticker_24h['quoteVolume']),
+                'change_24h': float(ticker_24h['priceChangePercent']),
+                'volatility': market_metrics.get('volatility_7d', 0)
             }
 
-            # Guardar en archivo CSV
-            df = pd.DataFrame([trade_info])
-            df.to_csv(
-                f"data/trades_{symbol.lower()}.csv",
-                mode="a",
-                header=not os.path.exists(f"data/trades_{symbol.lower()}.csv"),
-                index=False,
+            self.alert_manager.add_price_alert(
+                symbol=symbol,
+                target_price=timing.target_price,
+                current_price=current_price,
+                condition='above',
+                additional_info=additional_info
             )
 
         except Exception as e:
-            self.logger.error(f"Error registrando trade: {str(e)}")
+            print(ConsoleColors.error(f"Error configurando alertas de timing para {symbol}: {str(e)}"))
 
+    def _start_monitoring(self):
+        all_symbols = self.symbols_to_monitor + [coin['symbol'] for coin in self.meme_coins]
+        self.market_monitor.start_monitoring(all_symbols)
 
 if __name__ == "__main__":
     bot = TradingBot()
-
-    if bot.test_connection():
-        print("\n=== Verificando configuración de API ===")
-        bot.verify_api_permissions()
-        print("\n=== Configuración del Bot ===")
-        print(
-            "Trading automático:", "ACTIVADO" if bot.enable_trading else "DESACTIVADO"
-        )
-        print(f"Pares configurados: {', '.join(bot.pairs)}")
-        print(f"Cantidad por operación: {bot.trade_amount} USDT")
-        print(f"Stop Loss: {bot.stop_loss_percent * 100}%")
-
-        # Verificar balance
-        balance = bot.get_account_balance()
-        if balance:
-            print("\nBalance inicial:")
-            for b in balance:
-                if float(b["free"]) > 0:
-                    print(f"{b['asset']}: {b['free']}")
-        else:
-            print("\nNo se pudo obtener el balance.")
-            respuesta = input("¿Deseas continuar en modo monitoreo solamente? (s/n): ")
-            if respuesta.lower() != "s":
-                print("Deteniendo el bot...")
-                exit()
-
-        # Bucle principal
-        while True:
-            try:
-                for pair in bot.pairs:
-                    analysis = bot.analyze_market(pair)
-                    if analysis:
-                        print(f"\n{'='*50}")
-                        print(
-                            f"Análisis para {pair} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                        )
-                        print(f"{'='*50}")
-                        print(f"Precio actual: ${analysis['current_price']:.8f}")
-
-                        signal_text = "MANTENER"
-                        if analysis["signal"] == 1:
-                            signal_text = "🟢 COMPRA"
-                        elif analysis["signal"] == -1:
-                            signal_text = "🔴 VENTA"
-                        print(f"Señal: {signal_text}")
-
-                        print(f"RSI: {analysis['RSI']:.2f}")
-                        print(f"MACD: {analysis['MACD']:.8f}")
-                        print(
-                            f"Posición en Bandas de Bollinger: {analysis['BB_position']:.2f}%"
-                        )
-
-                        if bot.enable_trading:
-                            print("\nEjecutando estrategia de trading...")
-                            order = bot.execute_trade_strategy(pair, analysis)
-                            if order:
-                                print(f"Orden ejecutada: {order}")
-                            else:
-                                print("No se ejecutó ninguna orden")
-
-                print(f"\nEsperando 60 segundos para el próximo análisis...")
-                time.sleep(60)
-
-            except Exception as e:
-                bot.logger.error(f"Error en el ciclo principal: {str(e)}")
-                print(f"Error en el ciclo principal: {str(e)}")
-                print("Esperando 60 segundos antes de reintentar...")
-                time.sleep(60)
-
-    def monitor_positions(self):
-        """
-        Monitorea las posiciones abiertas
-        """
-        try:
-            print("\nMonitoreando posiciones abiertas:")
-            positions = self.get_open_positions()
-
-            for pos in positions:
-                current_price = self.get_current_price(pos["symbol"])
-                entry_price = float(pos["entry_price"])
-                pnl_percent = ((current_price - entry_price) / entry_price) * 100
-
-                print(f"\n{pos['symbol']}:")
-                print(f"Entrada: ${entry_price:.8f}")
-                print(f"Actual: ${current_price:.8f}")
-                print(f"P&L: {pnl_percent:.2f}%")
-
-                # Verificar stop loss
-                if pnl_percent <= -self.stop_loss_percent:
-                    print("¡Stop Loss alcanzado! Cerrando posición...")
-                    self.close_position(pos["symbol"], pos["quantity"])
-
-        except Exception as e:
-            self.logger.error(f"Error monitoreando posiciones: {str(e)}")
+    bot.run()
