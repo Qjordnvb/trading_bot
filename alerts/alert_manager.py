@@ -112,7 +112,8 @@ class AlertManager:
             level_icon = "📊"  # Icono de niveles de operación
             timing_icon = "🕒"  # Icono de análisis de timing
             market_icon = "📈"  # Icono de métricas de mercado
-            bullet_icon = "•"  # Icono de viñeta para razones/condiciones
+            entry_icon = "🔔"  # Icono de viñeta para razones
+            bullet_icon = "•"  # Icono de viñeta para condiciones
             price_icon = "💲"  # Icono de precio
             recommendation_icon = "🔍"  # Icono de recomendación
             check_icon = "✅"  # Icono de validación
@@ -128,7 +129,7 @@ class AlertManager:
             message += f"""{recommendation_icon} Recomendación de Trading:
 {signal_icon} Señal: {signal}
 {strength_icon} Fuerza: {strength}
-{bullet_icon} Entrada: ${entry_price:.8f}
+{entry_icon} Entrada: ${entry_price:.8f}
 {cross_icon} Salida: ${stop_loss:.8f} ({stop_loss_percent:.2f}%)
 {check_icon} Venta: ${take_profit:.8f} ({take_profit_percent:.2f}%)
 
