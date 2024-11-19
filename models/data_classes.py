@@ -8,10 +8,10 @@ class TradeRecommendation:
     signal: TradingSignal
     strength: SignalStrength
     reasons: List[str]
-    entry_price: float = None
-    # lastPrice: float = None
-    stop_loss: float = None
-    take_profit: float = None
+    entry_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None  # Mantener para compatibilidad
+    take_profits: Optional[List[dict]] = None
 
 @dataclass
 class TimingWindow:
