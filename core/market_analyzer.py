@@ -5,11 +5,15 @@ from utils.console_colors import ConsoleColors
 from alerts.alert_manager import AlertManager
 from models.data_classes import TradeRecommendation, TimingWindow
 from models.enums import MarketTrend, TradingSignal, SignalStrength, EntryTiming
+from core.coinmarketcap_client import CoinMarketCapClient
+from config import config
 
 class MarketAnalyzer:
+
     def __init__(self, client, alert_manager=None):
         self.client = client
         self.alert_manager = alert_manager
+        self.cmc_client = CoinMarketCapClient(config.CMC_API_KEY)
 
         # Parámetros optimizados de la estrategia
         self.strategy_params = {
@@ -23,7 +27,6 @@ class MarketAnalyzer:
                 "min_separation": 0.5,  # % mínimo de separación entre EMAs
                 "alignment_threshold": 0.8  # % de EMAs que deben estar alineadas
             },
-
 
             # MACD (Moving Average Convergence Divergence)
             "macd_params": {
@@ -66,55 +69,41 @@ class MarketAnalyzer:
                 "momentum_threshold": 0.3  # % para cambio de momentum
             },
 
-            # Gestión de Riesgo
+            # Gestión de Riesgo y Toma de Ganancias
             "risk_params": {
-                "max_risk_percent": 2,    # Riesgo máximo por operación
-                "partial_tp_ratio": 1.5,  # Ratio para toma parcial de beneficios
-                "max_trades_per_day": 3,  # Máximo de operaciones diarias
-                "volatility_threshold": 3.0,  # Desviación estándar máxima
-                "position_sizing":{
-                    "base_size": 1.0,  # Tamaño base de posición
-                    "scale_in_levels": [0.3, 0.3, 0.4],  # Distribución de entradas
-                    "max_position_size": 4.0  # Tamaño máximo total
-                },
-                "take_profit_levels": [  # Múltiples niveles de take profit
-                    {"size": 0.3, "ratio": 1.5},  # 30% a ratio 1.5
-                    {"size": 0.4, "ratio": 2.0},  # 40% a ratio 2.0
-                    {"size": 0.3, "ratio": 3.0}   # 30% a ratio 3.0
+                "max_risk_percent": 2.0,     # Riesgo máximo por operación
+                "risk_reward_min": 2.0,      # Ratio mínimo riesgo/beneficio
+
+                # Niveles de toma de ganancias parciales
+                "take_profit_levels": [
+                    {"size": 0.40, "ratio": 0.09},  # 40% de la posición a +2%
+                    {"size": 0.30, "ratio": 0.08},  # 30% de la posición a +5%
+                    {"size": 0.30, "ratio": 0.07}   # 30% de la posición a +10%
                 ],
-                "stop_loss_adjustment": {
-                    "breakeven_move": 0.5,  # Mover a breakeven al 50% del TP1
-                    "trailing_activation": 1.0,  # Activar trailing al 100% del TP1
-                    "trailing_step": 0.25  # Paso del trailing stop en ATR
+
+                # Configuración del stop loss
+                "stop_loss": {
+                    "initial": 0.02,           # 2% inicial
+                    "breakeven": 0.005,        # Mover a breakeven en 0.5%
+                    "trailing": {
+                        "activation": 1.02,     # Activar trailing en +2%
+                        "step": 0.005          # Paso del trailing 0.5%
+                    }
                 },
-                "risk_adjustments": {
-                    "trend_strength": 0.2,  # ±20% basado en fuerza de tendencia
-                    "volatility": 0.3,     # ±30% basado en volatilidad
-                    "market_condition": 0.25  # ±25% basado en condición de mercado
+
+                # Gestión de posición
+                "position": {
+                    "base_size": 1.0,          # Tamaño base de la posición
+                    "scale_in": [0.5, 0.3, 0.2],  # Distribución de entradas
+                    "max_trades": 3             # Máximo de operaciones simultáneas
                 },
+
+                # Filtros de mercado
                 "filters": {
                     "min_volume_24h": 1000000,  # Volumen mínimo en 24h
                     "min_liquidity_ratio": 0.02,  # Ratio mínimo de liquidez
                     "max_spread_percent": 0.1,  # Spread máximo permitido
                     "news_impact_delay": 30  # Minutos de espera post-noticias
-                },
-                "risk": {
-                "max_loss_percent": 5,      # Máxima pérdida permitida
-                "min_risk_reward": 2,       # Mínimo ratio riesgo/beneficio
-                "max_position_size": 4.0,   # Tamaño máximo de posición
-                "volatility_adjustment": 1.5 # Factor de ajuste por volatilidad
-                },
-                "entry": {
-                "support_buffer": 1.01,     # 1% sobre soporte
-                "resistance_buffer": 0.99,  # 1% bajo resistencia
-                "price_buffer": 0.995       # 0.5% bajo precio actual
-                },
-                "signals": {
-                "trend_strength_threshold": 0.6,  # Mínima fuerza de tendencia
-                "volume_significance": 1.5,       # Multiplicador de volumen
-                "rsi_oversold": 30,              # Nivel de sobreventa
-                "rsi_overbought": 70,            # Nivel de sobrecompra
-                "price_level_threshold": 0.02     # 2% para niveles de precio
                 }
             },
 
@@ -135,9 +124,23 @@ class MarketAnalyzer:
                     "trend_validation": 3,  # Pivotes para confirmar tendencia
                     "structure_break": 0.005  # % para ruptura de estructura
                 }
+            },
+            "volume": {
+                "min_24h": 500000,  # Volumen mínimo en 24h
+                "min_ratio": 1.5    # Ratio mínimo respecto al promedio
+            },
+            "volatility": {
+                "min": 0.02,        # Volatilidad mínima (2%)
+                "max": 0.15,        # Volatilidad máxima (15%)
+                "threshold": 0.08    # Umbral para decisiones (8%)
+            },
+            "trend": {
+                "min_strength": 0.3,  # Fuerza mínima de tendencia
+                "confirmation_periods": 3
             }
-        },
+        }
 
+        # Umbrales para detección de señales
         self.thresholds = {
             "momentum": {
                 "strong_buy": 15,
@@ -156,53 +159,78 @@ class MarketAnalyzer:
                 "overbought": 70,
                 "strong_overbought": 80
             }
-        },
-        self.timing_thresholds = {
-            "oversold_rsi": 30,
-            "overbought_rsi": 70,
-            "price_support": 0.05,
-            "price_resistance": 0.05,
-            "volume_spike": 2.0,
-            "volume_significant": 1.5,
-            "consolidation_range": 0.02,
-            "high_volatility": 0.05,
-            "low_volatility": 0.01
-        },
+        }
+
+        # Umbrales para timing de entrada/salida
         self.signal_thresholds = {
             'score': {
-                'strong_buy': 80,    # Puntuación mínima para compra fuerte
-                'buy': 65,           # Puntuación mínima para compra
-                'strong_sell': -80,  # Puntuación máxima para venta fuerte
-                'sell': -65          # Puntuación máxima para venta
+                'strong_buy': 70,    # Reducido de 80 a 70
+                'buy': 55,           # Reducido de 65 a 55
+                'strong_sell': -70,
+                'sell': -55
             },
             'confirmations': {
-                'strong': 6,         # Confirmaciones necesarias para señal fuerte
-                'moderate': 4,       # Confirmaciones para señal moderada
-                'weak': 2            # Confirmaciones para señal débil
+                'strong': 5,         # Reducido de 6 a 5
+                'moderate': 3,       # Reducido de 4 a 3
+                'weak': 2
+            }
+        }
+
+        # Umbrales de mercado generales
+        self.market_thresholds = {
+            "profit_lock": 0.01,          # Asegurar ganancias después de 1%
+            "trend_strength": 0.5,        # Reducido de 0.6 a 0.5
+            "volume_confirm": 1.3,        # Reducido de 1.5 a 1.3
+            "exit_conditions": {
+                "rsi_overbought": 80,     # Aumentado de 75 a 80
+                "trend_reversal": 0.25,    # Reducido de 0.3 a 0.25
+                "volume_drop": 0.4         # Reducido de 0.5 a 0.4
+            }
+        },
+        self.analysis_weights = {
+            'technical': 0.35,    # Análisis técnico
+            'market': 0.25,       # Datos de mercado (CMC)
+            'volume': 0.20,       # Análisis de volumen
+            'momentum': 0.20      # Momentum y tendencia
+        }
+        self.take_profit_params = {
+            "base_levels": [
+                {"level": 1.02, "size": 0.3},  # +2% - 30% de la posición
+                {"level": 1.035, "size": 0.3},  # +3.5% - 30% de la posición
+                {"level": 1.05, "size": 0.4}   # +5% - 40% de la posición
+            ],
+            "momentum_multiplier": {
+                "strong": 1.5,    # Aumentar targets en momentum fuerte
+                "moderate": 1.2,  # Aumentar moderadamente
+                "weak": 1.0       # Mantener targets base
+            },
+            "volatility_adjustment": {
+                "high": 1.3,      # Ampliar targets en alta volatilidad
+                "normal": 1.0,    # Mantener targets normales
+                "low": 0.8        # Reducir targets en baja volatilidad
             }
         }
 
     def _validate_market_conditions(self, data: Dict) -> bool:
         """Validación avanzada de condiciones de mercado"""
         try:
-            # 1. Verificar volatilidad
-            volatility = self._calculate_volatility(data)
-            if volatility > self.strategy_params["risk_params"]["volatility_threshold"]:
+            # Validar volumen
+            if data.get('volume', 0) < self.strategy_params["volume"]["min_24h"]:
                 return False
 
-            # 2. Verificar volumen
-            volume_24h = float(data.get('volume', 0))
-            if volume_24h < self.strategy_params["risk_params"]["filters"]["min_volume_24h"]:
+            # Validar volatilidad
+            volatility = data.get('volatility', 0)
+            if not (self.strategy_params["volatility"]["min"] <= volatility <=
+                   self.strategy_params["volatility"]["max"]):
                 return False
 
-            # 3. Verificar spread
-            current_spread = self._calculate_spread(data)
-            if current_spread > self.strategy_params["risk_params"]["filters"]["max_spread_percent"]:
+            # Validar tendencia
+            trend_data = data.get('trend', {})
+            if not trend_data:
                 return False
 
-            # 4. Verificar liquidez
-            liquidity_ratio = self._calculate_liquidity_ratio(data)
-            if liquidity_ratio < self.strategy_params["risk_params"]["filters"]["min_liquidity_ratio"]:
+            trend_strength = trend_data.get('strength', 0)
+            if trend_strength < self.strategy_params["trend"]["min_strength"]:
                 return False
 
             return True
@@ -251,188 +279,928 @@ class MarketAnalyzer:
                 'data': candlesticks
             }
 
-    def _analyze_technical_indicators(self, candlesticks):
-        """
-        Analiza los indicadores técnicos usando los datos en formato de lista/tupla
-        """
+    def _extract_validated_candle_data(self, candlesticks: List[Dict]) -> Dict:
+        """Extrae y valida datos de las velas"""
         try:
-            if not candlesticks or len(candlesticks) < 50:
-                return {
-                    'rsi': 50,
-                    'macd': {'trend': 'neutral', 'histogram': 0, 'crossover': 'none'},
-                    'bollinger': {'upper': 0, 'middle': 0, 'lower': 0},
-                    'is_valid': False
-                }
-
-            # Extraer datos de las velas
             closes = []
             highs = []
             lows = []
+            volumes = []
+            timestamps = []
 
             for candle in candlesticks:
                 try:
                     if isinstance(candle, (list, tuple)):
-                        closes.append(float(candle[4]))  # close
-                        highs.append(float(candle[2]))   # high
-                        lows.append(float(candle[3]))    # low
+                        closes.append(float(candle[4]))
+                        highs.append(float(candle[2]))
+                        lows.append(float(candle[3]))
+                        volumes.append(float(candle[5]))
+                        timestamps.append(int(candle[0]))
                     elif isinstance(candle, dict):
                         closes.append(float(candle['close']))
                         highs.append(float(candle['high']))
                         lows.append(float(candle['low']))
-                except (IndexError, KeyError, ValueError, TypeError) as e:
-                    print(f"Error procesando vela: {e}")
+                        volumes.append(float(candle['volume']))
+                        timestamps.append(int(candle['timestamp']))
+                except (ValueError, KeyError, IndexError) as e:
                     continue
 
-            if len(closes) < 50:  # Necesitamos suficientes datos
-                return {
-                    'rsi': 50,
-                    'macd': {'trend': 'neutral', 'histogram': 0, 'crossover': 'none'},
-                    'bollinger': {'upper': 0, 'middle': 0, 'lower': 0},
-                    'is_valid': False
-                }
+            # Validar calidad de datos
+            if len(closes) < 200:
+                return {'is_valid': False, 'error': 'Insufficient data'}
 
-            # Calcular indicadores
-            rsi = self._calculate_rsi(closes[-14:])
-            macd = self._calculate_macd(closes)
-            bb = self._calculate_bollinger_bands(closes[-20:])
+            # Validar continuidad temporal
+            if not self._validate_time_continuity(timestamps):
+                return {'is_valid': False, 'error': 'Time gaps detected'}
+
+            # Validar coherencia de precios
+            if not self._validate_price_coherence(highs, lows, closes):
+                return {'is_valid': False, 'error': 'Price coherence issues'}
 
             return {
-                'rsi': rsi,
-                'macd': macd,
-                'bollinger': bb,
                 'is_valid': True,
-                'last_price': closes[-1]
+                'closes': closes,
+                'highs': highs,
+                'lows': lows,
+                'volumes': volumes,
+                'timestamps': timestamps
             }
 
         except Exception as e:
-            print(f"Error en análisis técnico: {str(e)}")
-            print(f"Tipo de candlesticks: {type(candlesticks)}")
-            if candlesticks and len(candlesticks) > 0:
-                print(f"Primera vela: {candlesticks[0]}")
-            return {
-                'rsi': 50,
-                'macd': {'trend': 'neutral', 'histogram': 0, 'crossover': 'none'},
-                'bollinger': {'upper': 0, 'middle': 0, 'lower': 0},
-                'is_valid': False
-            }
+            return {'is_valid': False, 'error': str(e)}
 
-    def _calculate_rsi(self, prices, period: int = 14) -> float:
-        """
-        Calcula el RSI (Relative Strength Index)
-        """
+    def _calculate_advanced_rsi(self, timeframes: Dict) -> Dict:
+        """Cálculo avanzado de RSI con múltiples timeframes"""
         try:
-            # Si prices es una lista de diccionarios, extraer solo los precios de cierre
-            if isinstance(prices[0], dict):
-                prices = [float(price['close']) for price in prices]
-            # Si prices es una lista de listas/tuplas (formato Binance)
-            elif isinstance(prices[0], (list, tuple)):
-                prices = [float(price[4]) for price in prices]  # índice 4 es el precio de cierre
+            rsi_data = {}
+            weighted_rsi = 0
+            total_weight = 0
 
-            # Convertir a numpy array
-            prices = np.array(prices, dtype=float)
+            for tf_name, tf_info in timeframes.items():
+                rsi = self._calculate_rsi(tf_info['data'])
+                rsi_data[tf_name] = {
+                    'value': rsi,
+                    'zone': self._get_rsi_zone(rsi),
+                    'momentum': self._get_rsi_momentum(rsi)
+                }
+                weighted_rsi += rsi * tf_info['weight']
+                total_weight += tf_info['weight']
 
-            if len(prices) < period + 1:
-                return 50.0
+            # Añadir análisis de divergencias
+            rsi_data['divergences'] = self._analyze_rsi_divergences(timeframes)
+            rsi_data['weighted_value'] = weighted_rsi / total_weight if total_weight > 0 else 50
+            rsi_data['trend'] = self._get_rsi_trend(rsi_data)
+            rsi_data['strength'] = self._calculate_rsi_strength(rsi_data)
 
-            # Calcular cambios
-            deltas = np.diff(prices)
-
-            # Separar ganancias y pérdidas
-            gains = np.where(deltas > 0, deltas, 0)
-            losses = np.where(deltas < 0, -deltas, 0)
-
-            # Calcular promedios
-            avg_gain = np.mean(gains[-period:])
-            avg_loss = np.mean(losses[-period:])
-
-            if avg_loss == 0:
-                return 100.0
-
-            if avg_gain == 0:
-                return 0.0
-
-            rs = avg_gain / avg_loss
-            rsi = 100.0 - (100.0 / (1.0 + rs))
-
-            return min(100.0, max(0.0, float(rsi)))  # Asegurar que esté entre 0 y 100
+            return rsi_data
 
         except Exception as e:
-            print(f"Error calculando RSI: {str(e)}")
-            if len(prices) > 0:
-                print(f"Primer elemento de prices: {prices[0]}")
-                print(f"Tipo de prices: {type(prices)}")
-            return 50.0  # Valor neutral en caso de error
+            print(f"Error en RSI avanzado: {str(e)}")
+            return {'value': 50, 'trend': 'neutral', 'strength': 0}
 
+    def _get_rsi_zone(self, rsi: float) -> str:
+        """Determina la zona del RSI con más detalle"""
+        if rsi >= 80: return 'extreme_overbought'
+        if rsi >= 70: return 'overbought'
+        if rsi >= 60: return 'bullish'
+        if rsi <= 20: return 'extreme_oversold'
+        if rsi <= 30: return 'oversold'
+        if rsi <= 40: return 'bearish'
+        return 'neutral'
+
+    def _get_rsi_momentum(self, rsi: float) -> float:
+        """Calcula el momentum del RSI"""
+        try:
+            rsi_changes = [rsi[i] - rsi[i-1] for i in range(1, len(rsi))]
+            return sum(rsi_changes[-3:]) / 3  # Promedio de los últimos 3 cambios
+        except Exception:
+            return 0
+
+    def _analyze_rsi_divergences(self, timeframes: Dict) -> Dict:
+        """Analiza divergencias en el RSI"""
+        divergences = {
+            'bullish': False,
+            'bearish': False,
+            'strength': 0,
+            'timeframe': None
+        }
+
+        try:
+            for tf_name, tf_info in timeframes.items():
+                prices = tf_info['data']
+                rsi_values = [self._calculate_rsi(prices[i:]) for i in range(len(prices)-14)]
+
+                # Buscar divergencias
+                if len(prices) >= 5 and len(rsi_values) >= 5:
+                    price_trend = prices[-1] < prices[-5]
+                    rsi_trend = rsi_values[-1] > rsi_values[-5]
+
+                    if price_trend and not rsi_trend:
+                        divergences['bullish'] = True
+                        divergences['timeframe'] = tf_name
+                        divergences['strength'] = abs(prices[-1] - prices[-5]) / prices[-5]
+                    elif not price_trend and rsi_trend:
+                        divergences['bearish'] = True
+                        divergences['timeframe'] = tf_name
+                        divergences['strength'] = abs(prices[-1] - prices[-5]) / prices[-5]
+
+        except Exception as e:
+            print(f"Error en análisis de divergencias RSI: {str(e)}")
+
+        return divergences
+
+    def _calculate_technical_confidence(self, indicators: Dict) -> float:
+        """Calcula la confianza general del análisis técnico"""
+        try:
+            confidence = 0.0
+            weights = {
+                'trend': 0.3,
+                'consistency': 0.3,
+                'divergences': 0.2,
+                'momentum': 0.2
+            }
+
+            # Evaluar tendencia
+            if indicators['trend']['strength'] > 0.7:
+                confidence += weights['trend']
+            elif indicators['trend']['strength'] > 0.5:
+                confidence += weights['trend'] * 0.7
+
+            # Evaluar consistencia
+            if indicators['consistency']['score'] > 0.7:
+                confidence += weights['consistency']
+            elif indicators['consistency']['score'] > 0.5:
+                confidence += weights['consistency'] * 0.7
+
+            # Evaluar divergencias
+            if indicators['divergences']['confirmed']:
+                confidence += weights['divergences']
+
+            # Evaluar momentum
+            if abs(indicators['macd']['momentum_strength']) > 0.7:
+                confidence += weights['momentum']
+            elif abs(indicators['macd']['momentum_strength']) > 0.5:
+                confidence += weights['momentum'] * 0.7
+
+            return min(confidence, 1.0)
+
+        except Exception as e:
+            print(f"Error calculando confianza técnica: {str(e)}")
+            return 0.0
+
+    def _validate_time_continuity(self, timestamps: List[int]) -> bool:
+        """Valida la continuidad temporal de los datos"""
+        try:
+            expected_interval = timestamps[1] - timestamps[0]
+            max_allowed_gap = expected_interval * 2
+
+            for i in range(1, len(timestamps)):
+                if timestamps[i] - timestamps[i-1] > max_allowed_gap:
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _validate_price_coherence(self, highs: List[float], lows: List[float],
+                                closes: List[float]) -> bool:
+        """Valida la coherencia de los precios"""
+        try:
+            for i in range(len(highs)):
+                if not (lows[i] <= closes[i] <= highs[i]):
+                    return False
+                if highs[i] < lows[i]:
+                    return False
+            return True
+        except Exception:
+            return False
 
 
     def analyze_trading_opportunity(self, symbol: str) -> Optional[TradeRecommendation]:
-        """
-        Analiza una oportunidad de trading con niveles de precio optimizados
-        """
         try:
-            # Obtener datos actualizados
+            # Obtener datos de mercado actualizados
+            ticker_data = self.client.get_ticker_24h(symbol)
+            if not ticker_data:
+                return None
+
+            current_price = float(ticker_data['lastPrice'])
+
+            # Análisis técnico completo
             market_data = {
-                'D1': self.client.get_klines(symbol, interval='1d', limit=200),
-                'H4': self.client.get_klines(symbol, interval='4h', limit=200),
-                'H1': self.client.get_klines(symbol, interval='1h', limit=200)
+                'D1': self.client.get_klines(symbol, '1d', 200),
+                'H4': self.client.get_klines(symbol, '4h', 200),
+                'H1': self.client.get_klines(symbol, '1h', 200)
             }
 
-            if not all(market_data.values()):
-                return self._generate_hold_recommendation("Datos de mercado insuficientes")
+            # Análisis fundamental de mercado
+            volume_24h = float(ticker_data['volume'])
+            price_change = float(ticker_data['priceChangePercent'])
 
-            try:
-                current_price = float(self.client.get_ticker_price(symbol)['price'])
-            except Exception as e:
-                print(f"Error obteniendo precio actual: {str(e)}")
-                return self._generate_hold_recommendation("Error obteniendo precio actual")
-
-            # Análisis técnico
-            trend_analysis = self._analyze_main_trend(market_data)
-            technical_analysis = self._analyze_technical_indicators(market_data['H4'])
-            volume_analysis = self._analyze_volume(market_data['H4'])
-            support_resistance = self._calculate_support_resistance(market_data['H4'])
+            # Análisis técnico detallado
+            trend = self._analyze_main_trend(market_data)
+            momentum = self._analyze_momentum(market_data['H4'])
             volatility = self._calculate_volatility(market_data['H4'])
 
-            # Determinar señal y fuerza
-            signal, strength = self._determine_trading_signal(
-                trend_analysis,
-                technical_analysis,
-                volume_analysis,
-                support_resistance,
-                current_price,
-                volatility
-            )
+            # Determinar timing óptimo
+            timing = self.analyze_entry_timing(symbol)
 
-            # Generar razones del análisis
-            reasons = self._generate_analysis_reasons(
-                trend_analysis,
-                technical_analysis,
-                volume_analysis,
-                support_resistance,
-                volatility
-            )
+            # Validar condiciones de mercado
+            if not self._validate_market_conditions({
+                'volume': volume_24h,
+                'volatility': volatility,
+                'trend': trend
+            }):
+                return self._generate_hold_recommendation(
+                    "Condiciones de mercado no favorables",
+                    current_price
+                )
 
-            # Calcular niveles de precio optimizados
-            price_levels = self._calculate_optimal_price_levels(
+            # Análisis de señal considerando timing
+            if timing.timing == EntryTiming.NOT_RECOMMENDED:
+                return self._generate_hold_recommendation(
+                    "Timing no favorable para entrada",
+                    current_price
+                )
+
+            # Calcular niveles dinámicos de trading
+            trading_levels = self._calculate_dynamic_levels(
                 current_price,
-                support_resistance,
+                trend,
+                momentum,
                 volatility,
-                trend_analysis,
-                technical_analysis
+                timing
+            )
+
+            # Generar señal final
+            signal, strength = self._determine_final_signal(
+                trend,
+                momentum,
+                timing,
+                trading_levels
             )
 
             return TradeRecommendation(
                 signal=signal,
                 strength=strength,
-                reasons=reasons,
-                entry_price=price_levels['entry'],
-                stop_loss=price_levels['stop_loss'],
-                take_profit=price_levels['take_profit']
+                reasons=self._generate_comprehensive_reasons(
+                    trend, momentum, timing, trading_levels
+                ),
+                entry_price=trading_levels['entry'],
+                stop_loss=trading_levels['stop_loss'],
+                take_profit=trading_levels['take_profit']
             )
 
         except Exception as e:
-            print(f"Error analizando {symbol}: {str(e)}")
-            return self._generate_hold_recommendation(f"Error en análisis: {str(e)}")
+            print(f"Error en analyze_trading_opportunity: {str(e)}")
+            return None
+
+    def _calculate_dynamic_levels(self, current_price: float, trend: Dict,
+                                momentum: Dict, volatility: float,
+                                timing: TimingWindow) -> Dict:
+        """Calcula niveles dinámicos de trading basados en múltiples factores"""
+        try:
+            # Determinar multiplicadores basados en condiciones
+            momentum_strength = self._get_momentum_strength(momentum)
+            volatility_level = self._get_volatility_level(volatility)
+
+            # Ajustar multiplicadores
+            tp_multiplier = (
+                self.take_profit_params['momentum_multiplier'][momentum_strength] *
+                self.take_profit_params['volatility_adjustment'][volatility_level]
+            )
+
+            # Calcular entrada base
+            base_entry = current_price
+            if timing.timing == EntryTiming.WAIT_DIP:
+                base_entry = current_price * 0.99  # Esperar -1%
+            elif timing.timing == EntryTiming.WAIT_BREAKOUT:
+                base_entry = current_price * 1.01  # Esperar +1%
+
+            # Calcular stop loss dinámico
+            stop_distance = self._calculate_dynamic_stop(
+                current_price, volatility, trend
+            )
+            stop_loss = base_entry - stop_distance
+
+            # Calcular take profits dinámicos
+            take_profits = []
+            accumulated_size = 0
+            for level in self.take_profit_params['base_levels']:
+                target = base_entry * (1 + (level['level'] - 1) * tp_multiplier)
+                take_profits.append({
+                    'price': target,
+                    'size': level['size'],
+                    'accumulated': accumulated_size + level['size']
+                })
+                accumulated_size += level['size']
+
+            return {
+                'entry': base_entry,
+                'stop_loss': stop_loss,
+                'take_profit': take_profits[-1]['price'],  # Último nivel
+                'take_profit_levels': take_profits,
+                'trading_params': {
+                    'momentum_strength': momentum_strength,
+                    'volatility_level': volatility_level,
+                    'tp_multiplier': tp_multiplier
+                }
+            }
+
+        except Exception as e:
+            print(f"Error en calculate_dynamic_levels: {str(e)}")
+            return {
+                'entry': current_price,
+                'stop_loss': current_price * 0.98,
+                'take_profit': current_price * 1.04
+            }
+
+    def _evaluate_volume_score(self, levels: Dict) -> float:
+        """Evalúa la puntuación del volumen y liquidez"""
+        try:
+            score = 0.0
+            weight = 0.0
+
+            # 1. Volumen relativo al promedio
+            if 'volume' in levels:
+                volume_ratio = levels['volume'].get('ratio', 0)
+                if volume_ratio > 2.0:  # Volumen muy significativo
+                    score += 0.4
+                elif volume_ratio > 1.5:  # Volumen significativo
+                    score += 0.3
+                weight += 0.4
+
+            # 2. Presión compradora
+            if 'volume' in levels and 'buy_pressure' in levels['volume']:
+                buy_pressure = levels['volume']['buy_pressure']
+                if buy_pressure > 0.7:  # Alta presión compradora
+                    score += 0.3
+                elif buy_pressure > 0.6:
+                    score += 0.2
+                weight += 0.3
+
+            # 3. Consistencia del volumen
+            if 'volume' in levels and 'is_increasing' in levels['volume']:
+                if levels['volume']['is_increasing']:
+                    score += 0.3
+                weight += 0.3
+
+            return score / weight if weight > 0 else 0.0
+
+        except Exception as e:
+            print(f"Error en evaluate_volume_score: {str(e)}")
+            return 0.0
+
+    def _determine_final_signal(self, trend: Dict, momentum: Dict,
+                              timing: TimingWindow, levels: Dict) -> Tuple[TradingSignal, SignalStrength]:
+        """Determina la señal final con una precisión objetivo del 95%"""
+        try:
+            # Sistema de puntuación mejorado
+            score = 0
+            confirmations = 0
+            total_required_confirmations = 5  # Aumentamos el número de confirmaciones requeridas
+            confidence_threshold = 0.75  # Umbral de confianza mínimo
+
+            # 1. Verificar timing primero (Filtro Inicial)
+            if timing.timing in [EntryTiming.WAIT_DIP, EntryTiming.WAIT_BREAKOUT,
+                               EntryTiming.WAIT_CONSOLIDATION, EntryTiming.NOT_RECOMMENDED]:
+                return TradingSignal.HOLD, SignalStrength.MODERATE
+
+            # 2. Evaluación de Tendencia (35%)
+            trend_score = self._evaluate_trend_score(trend)
+            score += trend_score * 0.35
+            if trend_score > 0.7:
+                confirmations += 2
+            elif trend_score > 0.5:
+                confirmations += 1
+
+            # 3. Evaluación de Momentum (25%)
+            momentum_score = self._evaluate_momentum_score(momentum)
+            score += momentum_score * 0.25
+            if momentum_score > 0.7:
+                confirmations += 2
+            elif momentum_score > 0.5:
+                confirmations += 1
+
+            # 4. Evaluación de Timing y Niveles (25%)
+            timing_score = self._evaluate_timing_score(timing, levels)
+            score += timing_score * 0.25
+            if timing_score > 0.7:
+                confirmations += 2
+            elif timing_score > 0.5:
+                confirmations += 1
+
+            # 5. Evaluación de Volumen y Liquidez (15%)
+            volume_score = self._evaluate_volume_score(levels)
+            score += volume_score * 0.15
+            if volume_score > 0.7:
+                confirmations += 1
+
+            # Calcular confianza final
+            confidence = confirmations / total_required_confirmations
+
+            # Validaciones adicionales de seguridad
+            if not self._validate_signal_conditions(trend, momentum, timing, levels):
+                return TradingSignal.HOLD, SignalStrength.WEAK
+
+            # Determinar señal y fuerza basado en score y confirmaciones
+            if score >= 0.80 and confidence >= confidence_threshold and confirmations >= total_required_confirmations:
+                return TradingSignal.BUY, SignalStrength.STRONG
+            elif score >= 0.70 and confidence >= 0.6 and confirmations >= (total_required_confirmations - 1):
+                return TradingSignal.BUY, SignalStrength.MODERATE
+            elif score <= 0.30 and confidence >= confidence_threshold and confirmations >= total_required_confirmations:
+                return TradingSignal.SELL, SignalStrength.STRONG
+            elif score <= 0.40 and confidence >= 0.6 and confirmations >= (total_required_confirmations - 1):
+                return TradingSignal.SELL, SignalStrength.MODERATE
+
+            return TradingSignal.HOLD, SignalStrength.WEAK
+
+        except Exception as e:
+            print(f"Error en determine_final_signal: {str(e)}")
+            return TradingSignal.HOLD, SignalStrength.WEAK
+
+
+    def _evaluate_trend_score(self, trend: Dict) -> float:
+        """Evalúa la puntuación de tendencia con múltiples timeframes"""
+        try:
+            score = 0.0
+            weight = 0.0
+
+            # 1. Alineación de EMAs
+            if trend.get('timeframes'):
+                for tf_data in trend['timeframes'].values():
+                    if tf_data.get('is_bullish'):
+                        ema_alignment = (
+                            tf_data['price'] > tf_data['ema20'] >
+                            tf_data['ema50'] > tf_data['ema200']
+                        )
+                        if ema_alignment:
+                            score += 0.4
+                            weight += 0.4
+
+            # 2. Fuerza de tendencia
+            strength = trend.get('strength', 0)
+            score += strength * 0.3
+            weight += 0.3
+
+            # 3. Momentum de tendencia
+            if trend.get('timeframes'):
+                momentum_count = sum(
+                    1 for tf in trend['timeframes'].values()
+                    if tf.get('momentum', 0) > 0
+                )
+                momentum_score = momentum_count / len(trend['timeframes'])
+                score += momentum_score * 0.3
+                weight += 0.3
+
+            return score / weight if weight > 0 else 0.0
+
+        except Exception as e:
+            print(f"Error en evaluate_trend_score: {str(e)}")
+            return 0.0
+
+    def _evaluate_momentum_score(self, momentum: Dict) -> float:
+        """Evalúa la puntuación de momentum con múltiples factores"""
+        try:
+            score = 0.0
+            weight = 0.0
+
+            # 1. Momentum a corto plazo
+            if 'short_term' in momentum:
+                short_term = momentum['short_term']
+                if short_term > 0:
+                    score += min(short_term / 10, 1.0) * 0.4
+                weight += 0.4
+
+            # 2. Momentum a medio plazo
+            if 'medium_term' in momentum:
+                medium_term = momentum['medium_term']
+                if medium_term > 0:
+                    score += min(medium_term / 20, 1.0) * 0.3
+                weight += 0.3
+
+            # 3. Aceleración
+            if 'acceleration' in momentum:
+                acceleration = momentum['acceleration']
+                if acceleration > 0:
+                    score += min(acceleration / 5, 1.0) * 0.3
+                weight += 0.3
+
+            # 4. Consistencia
+            is_strong = momentum.get('is_strong', False)
+            is_positive = momentum.get('is_positive', False)
+            if is_strong and is_positive:
+                score += 0.2
+                weight += 0.2
+
+            return score / weight if weight > 0 else 0.0
+
+        except Exception as e:
+            print(f"Error en evaluate_momentum_score: {str(e)}")
+            return 0.0
+
+    def _evaluate_timing_score(self, timing: TimingWindow, levels: Dict) -> float:
+        """Evalúa la puntuación de timing considerando múltiples factores"""
+        try:
+            score = 0.0
+            weight = 0.0
+
+            # 1. Timing base
+            if timing.timing == EntryTiming.IMMEDIATE:
+                score += timing.confidence * 0.4
+                weight += 0.4
+            elif timing.timing == EntryTiming.WAIT_BREAKOUT:
+                # Solo puntuar si estamos cerca de niveles clave
+                if levels.get('entry') and abs(levels['entry'] - timing.target_price) / timing.target_price < 0.02:
+                    score += timing.confidence * 0.3
+                weight += 0.3
+
+            # 2. Proximidad a niveles clave
+            if levels.get('support') and levels.get('entry'):
+                distance_to_support = abs(levels['entry'] - levels['support']) / levels['support']
+                if distance_to_support < 0.02:  # 2% del soporte
+                    score += 0.3
+                    weight += 0.3
+
+            # 3. Risk/Reward
+            if levels.get('stop_loss') and levels.get('take_profit') and levels.get('entry'):
+                risk = abs(levels['entry'] - levels['stop_loss'])
+                reward = abs(levels['take_profit'] - levels['entry'])
+                if risk > 0:
+                    rr_ratio = reward / risk
+                    if rr_ratio >= 3:
+                        score += 0.3
+                        weight += 0.3
+
+            return score / weight if weight > 0 else 0.0
+
+        except Exception as e:
+            print(f"Error en evaluate_timing_score: {str(e)}")
+            return 0.0
+
+    def _validate_signal_conditions(self, trend: Dict, momentum: Dict,
+                                 timing: TimingWindow, levels: Dict) -> bool:
+        """Validaciones adicionales de seguridad para la señal"""
+        try:
+            # 1. Verificar consistencia de tendencia
+            if not trend.get('is_valid'):
+                return False
+
+            # 2. Verificar momentum mínimo
+            if not momentum.get('is_positive'):
+                return False
+
+            # 3. Verificar timing válido
+            if timing.confidence < 0.5:
+                return False
+
+            # 4. Verificar niveles válidos
+            if not levels.get('entry') or not levels.get('stop_loss') or not levels.get('take_profit'):
+                return False
+
+            # 5. Verificar risk/reward mínimo
+            risk = abs(levels['entry'] - levels['stop_loss'])
+            reward = abs(levels['take_profit'] - levels['entry'])
+            if risk == 0 or (reward / risk) < 2:
+                return False
+
+            return True
+
+        except Exception as e:
+            print(f"Error en validate_signal_conditions: {str(e)}")
+            return False
+
+    def _calculate_dynamic_stop(self, current_price: float, volatility: float,
+                              trend: Dict) -> float:
+        """Calcula el stop loss dinámico basado en volatilidad y tendencia"""
+        try:
+            # Base stop distance (2% por defecto)
+            base_stop = current_price * 0.02
+
+            # Ajustar por volatilidad
+            if volatility > 0.05:  # Alta volatilidad
+                base_stop *= 1.5
+            elif volatility < 0.02:  # Baja volatilidad
+                base_stop *= 0.8
+
+            # Ajustar por fuerza de tendencia
+            trend_strength = trend.get('strength', 0.5)
+            if trend_strength > 0.7:
+                base_stop *= 0.9  # Reducir stop en tendencia fuerte
+            elif trend_strength < 0.3:
+                base_stop *= 1.2  # Aumentar stop en tendencia débil
+
+            return base_stop
+
+        except Exception as e:
+            print(f"Error en calculate_dynamic_stop: {str(e)}")
+            return current_price * 0.02
+
+    def _get_momentum_strength(self, momentum: Dict) -> str:
+        """Determina la fuerza del momentum"""
+        try:
+            momentum_value = momentum.get('medium_term', 0)
+            if abs(momentum_value) > 15:
+                return "strong"
+            elif abs(momentum_value) > 8:
+                return "moderate"
+            return "weak"
+        except Exception:
+            return "weak"
+
+    def _get_volatility_level(self, volatility: float) -> str:
+        """Determina el nivel de volatilidad"""
+        if volatility > 0.05:
+            return "high"
+        elif volatility < 0.02:
+            return "low"
+        return "normal"
+
+    def _generate_comprehensive_reasons(self, trend: Dict, momentum: Dict,
+                                     timing: TimingWindow, levels: Dict) -> List[str]:
+        """Genera razones detalladas para la recomendación"""
+        reasons = []
+
+        # Razones de tendencia
+        if trend['trend'] == 'bullish':
+            reasons.append(f"Tendencia alcista con fuerza {trend['strength']:.2%}")
+        elif trend['trend'] == 'bearish':
+            reasons.append(f"Tendencia bajista con fuerza {trend['strength']:.2%}")
+
+        # Razones de momentum
+        momentum_str = self._get_momentum_strength(momentum)
+        if momentum_str == "strong":
+            reasons.append("Momentum fuerte y favorable")
+        elif momentum_str == "moderate":
+            reasons.append("Momentum moderado")
+
+        # Razones de timing
+        if timing.timing != EntryTiming.NOT_RECOMMENDED:
+            reasons.append(f"Timing favorable: {timing.timing.value}")
+            reasons.append(f"Confianza en timing: {timing.confidence:.1%}")
+
+        return reasons
+
+    def _calculate_market_score(self, market_metrics: Dict) -> float:
+        """Calcula score basado en métricas de mercado"""
+        try:
+            score = 0.0
+            weight = 0.0
+
+            # Evaluar cambio de precio
+            if 'percent_change_24h' in market_metrics:
+                change_24h = market_metrics['percent_change_24h']
+                score += ((change_24h + 20) / 40) * 0.3  # Normalizar a [0,1]
+                weight += 0.3
+
+            # Evaluar volumen
+            if 'volume_24h' in market_metrics:
+                volume = market_metrics['volume_24h']
+                volume_score = min(volume / 100000000, 1.0)  # Normalizar a 100M
+                score += volume_score * 0.3
+                weight += 0.3
+
+            # Evaluar dominancia de mercado
+            if 'market_dominance' in market_metrics:
+                dominance = market_metrics['market_dominance']
+                score += (dominance / 100) * 0.2
+                weight += 0.2
+
+            # Evaluar ranking
+            if 'rank' in market_metrics:
+                rank_score = 1 - (min(market_metrics['rank'], 100) / 100)
+                score += rank_score * 0.2
+                weight += 0.2
+
+            return score / weight if weight > 0 else 0.5
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error calculando market score: {str(e)}"))
+            return 0.5
+
+    def _generate_analysis_reasons(self, trend_analysis: Dict,
+                                 technical_analysis: Dict,
+                                 volume_analysis: Dict,
+                                 support_resistance: Dict,
+                                 volatility: float,
+                                 market_metrics: Dict) -> List[str]:
+        """Genera razones de análisis incluyendo métricas de mercado"""
+        reasons = []
+
+        # Razones técnicas existentes
+        if trend_analysis.get('trend') == 'bullish':
+            reasons.append(f"Tendencia alcista con fuerza {trend_analysis.get('strength', 0):.2%}")
+        elif trend_analysis.get('trend') == 'bearish':
+            reasons.append(f"Tendencia bajista con fuerza {trend_analysis.get('strength', 0):.2%}")
+
+        # Razones de mercado
+        if market_metrics:
+            change_24h = market_metrics.get('percent_change_24h', 0)
+            if abs(change_24h) > 5:
+                direction = "alcista" if change_24h > 0 else "bajista"
+                reasons.append(f"Movimiento {direction} significativo ({change_24h:.1f}%)")
+
+            volume_24h = market_metrics.get('volume_24h', 0)
+            if volume_24h > 100000000:  # 100M USD
+                reasons.append(f"Alto volumen de mercado (${volume_24h:,.0f})")
+
+            rank = market_metrics.get('rank', 0)
+            if rank <= 20:
+                reasons.append(f"Top {rank} por capitalización de mercado")
+
+            dominance = market_metrics.get('market_dominance', 0)
+            if dominance > 1:
+                reasons.append(f"Dominancia de mercado significativa ({dominance:.1f}%)")
+
+        # Mantener el resto de las razones existentes...
+
+        return reasons
+
+    def generate_trading_levels(self, current_price: float, volatility: float,
+                              market_metrics: Dict = None) -> Dict:
+        """Genera niveles de trading considerando métricas de mercado"""
+        try:
+            # Ajustar los niveles según la volatilidad del mercado
+            base_stop_loss = 0.02  # 2% base
+            base_take_profit = 0.06  # 6% base
+
+            # Ajustar según métricas de mercado si están disponibles
+            if market_metrics:
+                market_volatility = market_metrics.get('volatility_7d', volatility)
+                rank = market_metrics.get('rank', 50)
+
+                # Ajustar según ranking
+                if rank <= 10:
+                    base_stop_loss *= 0.8  # Menor riesgo para top coins
+                    base_take_profit *= 0.8
+                elif rank > 50:
+                    base_stop_loss *= 1.2  # Mayor riesgo para coins menores
+                    base_take_profit *= 1.2
+
+                # Ajustar según volatilidad del mercado
+                volatility_factor = max(0.5, min(2.0, market_volatility / 0.02))
+                base_stop_loss *= volatility_factor
+                base_take_profit *= volatility_factor
+
+            # Calcular niveles
+            stop_loss = current_price * (1 - base_stop_loss)
+            take_profits = [
+                {
+                    "price": current_price * (1 + (base_take_profit * level)),
+                    "size": size
+                }
+                for level, size in [
+                    (1.0, 0.4),  # 40% en primer objetivo
+                    (1.5, 0.3),  # 30% en segundo objetivo
+                    (2.0, 0.3)   # 30% en tercer objetivo
+                ]
+            ]
+
+            return {
+                "entry_price": current_price,
+                "stop_loss": stop_loss,
+                "take_profits": take_profits
+            }
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error generando niveles: {str(e)}"))
+            return None
+
+    def _determine_trading_signal_with_market_data(self, trend_analysis: Dict,
+                                                 technical_analysis: Dict,
+                                                 volume_analysis: Dict,
+                                                 support_resistance: Dict,
+                                                 current_price: float,
+                                                 volatility: float,
+                                                 market_metrics: Dict) -> Tuple[TradingSignal, SignalStrength]:
+        """Determina señal considerando datos técnicos y de mercado"""
+        try:
+            # Calcular scores individuales
+            technical_score = self._calculate_technical_score(trend_analysis, technical_analysis)
+            market_score = self._calculate_market_score(market_metrics)
+            volume_score = self._calculate_volume_score(volume_analysis)
+            momentum_score = self._calculate_momentum_score(technical_analysis)
+
+            # Calcular score final ponderado
+            final_score = (
+                technical_score * self.analysis_weights['technical'] +
+                market_score * self.analysis_weights['market'] +
+                volume_score * self.analysis_weights['volume'] +
+                momentum_score * self.analysis_weights['momentum']
+            )
+
+            # Determinar señal y fuerza
+            if final_score >= 0.7:
+                return TradingSignal.BUY, SignalStrength.STRONG
+            elif final_score >= 0.5:
+                return TradingSignal.BUY, SignalStrength.MODERATE
+            elif final_score <= 0.3:
+                return TradingSignal.SELL, SignalStrength.STRONG
+            elif final_score <= 0.5:
+                return TradingSignal.SELL, SignalStrength.MODERATE
+            else:
+                return TradingSignal.HOLD, SignalStrength.WEAK
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error determinando señal: {str(e)}"))
+            return TradingSignal.HOLD, SignalStrength.WEAK
+
+
+    def format_trading_levels(self, recommendation: TradeRecommendation) -> str:
+        """Formatea los niveles de trading para la salida"""
+        output = []
+
+        if not recommendation.entry_price:
+            return "No hay niveles disponibles"
+
+        output.append(f"Niveles de Precio:")
+        output.append(f"Precio actual: ${recommendation.entry_price:,.6f}")
+
+        if recommendation.stop_loss:
+            stop_loss_percent = ((recommendation.stop_loss - recommendation.entry_price) /
+                               recommendation.entry_price) * 100
+            output.append(f"Stop Loss: ${recommendation.stop_loss:.8f} ({stop_loss_percent:.2f}%)")
+
+        if recommendation.take_profits:
+            output.append("\nTake Profits Escalonados:")
+            for idx, tp in enumerate(recommendation.take_profits, 1):
+                profit_percent = ((tp['price'] - recommendation.entry_price) /
+                                recommendation.entry_price) * 100
+                output.append(
+                    f"{idx}. ${tp['price']:.8f} (+{profit_percent:.2f}%) - "
+                    f"Vender {tp['size'] * 100}% de la posición"
+                )
+
+        return "\n".join(output)
+
+    def validate_trading_levels(self, levels: Dict) -> bool:
+        """Valida que los niveles de trading sean coherentes"""
+        try:
+            if not levels or 'entry_price' not in levels:
+                return False
+
+            # Validar stop loss
+            if levels['stop_loss'] >= levels['entry_price']:
+                return False
+
+            # Validar take profits
+            last_price = levels['entry_price']
+            for tp in levels['take_profits']:
+                if tp['price'] <= last_price:
+                    return False
+                last_price = tp['price']
+
+            return True
+        except Exception as e:
+            print(f"Error validando niveles: {e}")
+            return False
+
+    def manage_position(self, symbol: str, entry_price: float, current_positions: List[Dict]):
+        """Gestiona posiciones abiertas"""
+        try:
+            current_price = float(self.client.get_ticker_price(symbol)['price'])
+            profit_percentage = ((current_price - entry_price) / entry_price) * 100
+
+            # Mover a breakeven (+0.5%)
+            if profit_percentage >= 0.5:
+                new_stop = entry_price * 1.001  # Entry + 0.1%
+                self.update_stop_loss(symbol, new_stop)
+
+            # Activar trailing stop
+            if profit_percentage >= 2:  # Activar en +2%
+                trail_amount = current_price * 0.005  # 0.5% trailing
+                new_stop = current_price - trail_amount
+                self.update_stop_loss(symbol, new_stop)
+
+            # Gestionar take profits parciales
+            for position in current_positions:
+                self.check_take_profit_levels(symbol, position, current_price)
+
+        except Exception as e:
+            print(f"Error gestionando posición: {e}")
+
+    def check_take_profit_levels(self, symbol: str, position: Dict, current_price: float):
+        """Verifica y ejecuta take profits parciales"""
+        try:
+            entry_price = float(position['entry_price'])
+            current_profit = (current_price - entry_price) / entry_price * 100
+
+            for level in self.strategy_params["risk_params"]["take_profit_levels"]:
+                target_profit = (level["ratio"] - 1) * 100  # Convertir ratio a porcentaje
+                if current_profit >= target_profit:
+                    quantity = float(position['quantity']) * level["size"]
+                    if quantity > 0:
+                        self.execute_take_profit(symbol, quantity, current_price)
+
+        except Exception as e:
+            print(f"Error verificando take profits: {e}")
+
+    def execute_take_profit(self, symbol: str, quantity: float, price: float):
+        """Ejecuta una orden de take profit"""
+        try:
+            # Aquí implementarías la lógica de tu broker/exchange
+            print(f"Ejecutando take profit en {symbol}: {quantity} a ${price:,.2f}")
+            # self.client.create_market_sell_order(symbol, quantity)
+        except Exception as e:
+            print(f"Error ejecutando take profit: {e}")
 
     def _determine_trading_signal(self, trend_analysis, technical_analysis,
                                 volume_analysis, support_resistance, current_price,
@@ -546,130 +1314,32 @@ class MarketAnalyzer:
             print(ConsoleColors.error(f"Error en determine_trading_signal: {str(e)}"))
             return TradingSignal.HOLD, SignalStrength.WEAK
 
-    def _calculate_optimal_price_levels(self, current_price, support_resistance,
-                                      volatility, trend_analysis, technical_analysis) -> Dict:
-        """
-        Calcula niveles de precio óptimos basados en análisis técnico
-        """
-        try:
-            # Valores iniciales basados en el precio actual
-            price_levels = {
-                'entry': current_price,
-                'stop_loss': current_price * 0.95,  # -5% por defecto
-                'take_profit': current_price * 1.15  # +15% por defecto
-            }
-
-            if support_resistance:
-                support = support_resistance.get('support')
-                resistance = support_resistance.get('resistance')
-
-                if support and resistance:
-                    # Entrada basada en niveles técnicos
-                    if current_price < support * 1.02:  # Cerca del soporte
-                        price_levels['entry'] = support * 1.01  # 1% sobre soporte
-                        price_levels['stop_loss'] = support * 0.98  # 2% bajo soporte
-                        price_levels['take_profit'] = min(
-                            resistance * 0.99,  # Justo bajo resistencia
-                            support * 1.10  # Mínimo 10% de ganancia
-                        )
-                    else:
-                        # Entrada conservadora a precio actual
-                        risk = current_price - support
-                        reward = resistance - current_price
-
-                        if reward/risk >= 2:  # Risk/Reward mínimo 1:2
-                            price_levels['entry'] = current_price * 0.995  # 0.5% bajo precio actual
-                            price_levels['stop_loss'] = max(
-                                support * 0.99,
-                                price_levels['entry'] * 0.97  # Máximo 3% de pérdida
-                            )
-                            price_levels['take_profit'] = min(
-                                resistance * 0.99,
-                                price_levels['entry'] * 1.06  # Mínimo 6% de ganancia
-                            )
-
-            # Ajustar por volatilidad
-            if volatility > 0.05:  # Alta volatilidad
-                price_levels['stop_loss'] = price_levels['entry'] * 0.93  # Stop más amplio
-                price_levels['take_profit'] = price_levels['entry'] * 1.20  # Target más ambicioso
-
-            return price_levels
-
-        except Exception as e:
-            print(f"Error en calculate_optimal_price_levels: {str(e)}")
-            return {
-                'entry': current_price,
-                'stop_loss': current_price * 0.95,
-                'take_profit': current_price * 1.15
-            }
-
-    def _generate_analysis_reasons(self, trend_analysis, technical_analysis,
-                                 volume_analysis, support_resistance, volatility) -> List[str]:
-        """
-        Genera razones detalladas del análisis
-        """
-        reasons = []
-
-        # Añadir razón de tendencia
-        if trend_analysis.get('trend') == 'bullish':
-            reasons.append(f"Tendencia alcista con fuerza {trend_analysis.get('strength', 0):.2%}")
-        elif trend_analysis.get('trend') == 'bearish':
-            reasons.append(f"Tendencia bajista con fuerza {trend_analysis.get('strength', 0):.2%}")
-
-        # Añadir niveles de soporte/resistencia
-        if support_resistance:
-            if 'support' in support_resistance:
-                reasons.append(f"Soporte en ${support_resistance['support']:.2f}")
-            if 'resistance' in support_resistance:
-                reasons.append(f"Resistencia en ${support_resistance['resistance']:.2f}")
-
-        # Añadir información de volatilidad
-        reasons.append(f"{'Alta' if volatility > 0.05 else 'Baja'} volatilidad ({volatility:.1%})")
-
-        # Añadir información de volumen
-        if volume_analysis.get('is_significant'):
-            reasons.append(f"Volumen significativo ({volume_analysis.get('ratio', 0):.1f}x promedio)")
-
-        return reasons
 
 
 
-    def _generate_hold_recommendation(self, reason: str, current_price: float = None) -> TradeRecommendation:
-        """
-        Genera una recomendación de HOLD
-        """
-        try:
-            if current_price is None:
-                return TradeRecommendation(
-                    signal=TradingSignal.HOLD,
-                    strength=SignalStrength.WEAK,
-                    reasons=[reason],
-                    entry_price=None,
-                    stop_loss=None,
-                    take_profit=None
-                )
-
-            stop_loss = current_price * 0.95
-            take_profit = current_price * 1.15
-
+    def _generate_hold_recommendation(self, reason: str, current_price: Optional[float] = None) -> TradeRecommendation:
+        """Genera una recomendación HOLD con manejo mejorado de precios nulos"""
+        if current_price is None:
             return TradeRecommendation(
                 signal=TradingSignal.HOLD,
                 strength=SignalStrength.WEAK,
                 reasons=[reason],
-                entry_price=current_price,
-                stop_loss=stop_loss,
-                take_profit=take_profit
-            )
-        except Exception as e:
-            print(f"Error generando recomendación HOLD: {str(e)}")
-            return TradeRecommendation(
-                signal=TradingSignal.HOLD,
-                strength=SignalStrength.WEAK,
-                reasons=["Error en análisis"],
                 entry_price=None,
                 stop_loss=None,
                 take_profit=None
             )
+
+        stop_loss = current_price * 0.95  # -5%
+        take_profit = current_price * 1.15  # +15%
+
+        return TradeRecommendation(
+            signal=TradingSignal.HOLD,
+            strength=SignalStrength.WEAK,
+            reasons=[reason],
+            entry_price=current_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit
+        )
 
     def _analyze_main_trend(self, market_data):
         """
@@ -1106,48 +1776,48 @@ class MarketAnalyzer:
             confidence = 0
             signals = []
 
-            # Análisis de tendencia
+            # Análisis de tendencia (35%)
             if trend in [MarketTrend.STRONG_UPTREND, MarketTrend.UPTREND]:
-                base_score += self.weights["trend"]
+                base_score += 35
                 signals.append("Tendencia alcista")
                 confidence += 0.2
             elif trend in [MarketTrend.STRONG_DOWNTREND, MarketTrend.DOWNTREND]:
-                base_score -= self.weights["trend"]
+                base_score -= 35
                 signals.append("Tendencia bajista")
                 confidence += 0.2
 
-            # Análisis de volumen
+            # Análisis de volumen (25%)
             if volume_analysis['is_significant'] and volume_analysis['is_increasing']:
-                base_score += self.weights["volume"]
+                base_score += 25
                 signals.append("Volumen significativo y creciente")
                 confidence += 0.15
 
-            # Análisis de momentum
+            # Análisis de momentum (20%)
             if momentum['is_strong'] and momentum['is_positive']:
-                base_score += self.weights["momentum"]
+                base_score += 20
                 signals.append("Momentum fuerte y positivo")
                 confidence += 0.15
             elif momentum['is_strong'] and not momentum['is_positive']:
-                base_score -= self.weights["momentum"]
+                base_score -= 20
                 signals.append("Momentum fuerte pero negativo")
                 confidence += 0.15
 
-            # Análisis de patrones
-            for pattern in pattern_analysis.get('patterns', []):
-                if pattern['type'] == 'bullish':
-                    base_score += self.weights["pattern"] * pattern['reliability']
-                    signals.append(f"Patrón alcista: {pattern['name']}")
-                    confidence += 0.1
-                else:
-                    base_score -= self.weights["pattern"] * pattern['reliability']
-                    signals.append(f"Patrón bajista: {pattern['name']}")
-                    confidence += 0.1
+            # Análisis de patrones y correlación (20%)
+            if pattern_analysis:
+                for pattern in pattern_analysis.get('patterns', []):
+                    if pattern['type'] == 'bullish':
+                        base_score += 10 * pattern.get('strength', 0.5)
+                        signals.append(f"Patrón alcista: {pattern['name']}")
+                        confidence += 0.1
+                    elif pattern['type'] == 'bearish':
+                        base_score -= 10 * pattern.get('strength', 0.5)
+                        signals.append(f"Patrón bajista: {pattern['name']}")
+                        confidence += 0.1
 
-            # Análisis de correlación
-            if correlation['market_strength'] == "very_strong":
+            if correlation.get('market_strength') == "very_strong":
                 base_score *= 1.2
                 confidence += 0.1
-            elif correlation['market_strength'] == "weak":
+            elif correlation.get('market_strength') == "weak":
                 base_score *= 0.8
                 confidence += 0.1
 
@@ -1156,7 +1826,7 @@ class MarketAnalyzer:
                 'confidence': min(confidence, 1.0),
                 'signals': signals,
                 'market_context': {
-                    'trend': trend.value,
+                    'trend': trend.value if hasattr(trend, 'value') else str(trend),
                     'volume_context': volume_analysis,
                     'momentum_context': momentum,
                     'correlation_context': correlation
@@ -1231,17 +1901,265 @@ class MarketAnalyzer:
 
 
 
-    def analyze_entry_timing(self, symbol: str) -> TimingWindow:
+
+
+
+
+    def _calculate_advanced_macd(self, closes: List[float]) -> Dict:
         """
-        Analiza el mejor momento para entrar al mercado
+        Calcula MACD con análisis avanzado
         """
         try:
+            fast = 12
+            slow = 26
+            signal = 9
+
+            # Calcular EMAs
+            fast_ema = self._calculate_ema(closes, fast)
+            slow_ema = self._calculate_ema(closes, slow)
+
+            # Calcular línea MACD
+            macd_line = [f - s for f, s in zip(fast_ema, slow_ema)]
+
+            # Calcular línea de señal
+            signal_line = self._calculate_ema(macd_line, signal)
+
+            # Calcular histograma
+            histogram = [m - s for m, s in zip(macd_line, signal_line)]
+
+            # Analizar tendencia y fuerza
+            trend = 'bullish' if macd_line[-1] > signal_line[-1] else 'bearish'
+            strength = abs(histogram[-1]) / abs(macd_line[-1]) if abs(macd_line[-1]) > 0 else 0
+
+            # Detectar convergencias/divergencias
+            price_trend = 'up' if closes[-1] > closes[-5] else 'down'
+            macd_trend = 'up' if macd_line[-1] > macd_line[-5] else 'down'
+            divergence = price_trend != macd_trend
+
+            return {
+                'macd': float(macd_line[-1]),
+                'signal': float(signal_line[-1]),
+                'histogram': float(histogram[-1]),
+                'trending_up': trend == 'bullish',
+                'strength': float(strength),
+                'momentum_strength': float(abs(histogram[-1])),
+                'divergence': divergence,
+                'crossover': 'bullish' if macd_line[-1] > signal_line[-1] and macd_line[-2] <= signal_line[-2]
+                            else 'bearish' if macd_line[-1] < signal_line[-1] and macd_line[-2] >= signal_line[-2]
+                            else 'none'
+            }
+
+        except Exception as e:
+            print(f"Error en _calculate_advanced_macd: {str(e)}")
+            return {
+                'macd': 0,
+                'signal': 0,
+                'histogram': 0,
+                'trending_up': False,
+                'strength': 0,
+                'momentum_strength': 0,
+                'divergence': False,
+                'crossover': 'none'
+            }
+
+    def _calculate_advanced_bollinger(self, timeframes: Dict) -> Dict:
+        """
+        Calcula Bandas de Bollinger con análisis avanzado
+        """
+        try:
+            results = {}
+            for tf_name, tf_info in timeframes.items():
+                prices = tf_info['data']
+                if len(prices) < 20:
+                    continue
+
+                # Calcular media móvil y desviación estándar
+                sma = sum(prices[-20:]) / 20
+                std = np.std(prices[-20:])
+
+                # Calcular bandas
+                upper = sma + (2 * std)
+                lower = sma - (2 * std)
+
+                # Calcular ancho de banda y %B
+                bandwidth = (upper - lower) / sma
+                percent_b = (prices[-1] - lower) / (upper - lower) if upper != lower else 0.5
+
+                results[tf_name] = {
+                    'upper': float(upper),
+                    'middle': float(sma),
+                    'lower': float(lower),
+                    'bandwidth': float(bandwidth),
+                    'percent_b': float(percent_b),
+                    'squeeze': bandwidth < 0.1  # Detectar squeeze
+                }
+
+            # Calcular señales combinadas
+            combined = {
+                'squeeze_momentum': any(tf['squeeze'] for tf in results.values()),
+                'trend_strength': self._calculate_bb_trend_strength(results),
+                'volatility_increasing': self._is_volatility_increasing(results)
+            }
+
+            return {**results, 'analysis': combined}
+
+        except Exception as e:
+            print(f"Error en _calculate_advanced_bollinger: {str(e)}")
+            return {
+                'error': str(e),
+                'is_valid': False
+            }
+
+    def _calculate_bb_trend_strength(self, bb_results: Dict) -> float:
+        """
+        Calcula la fuerza de la tendencia basada en Bollinger Bands
+        """
+        try:
+            strength = 0.0
+            count = 0
+
+            for tf_data in bb_results.values():
+                if isinstance(tf_data, dict):
+                    percent_b = tf_data.get('percent_b', 0.5)
+                    if percent_b > 0.8:
+                        strength += 1
+                    elif percent_b < 0.2:
+                        strength -= 1
+                    count += 1
+
+            return strength / count if count > 0 else 0
+
+        except Exception:
+            return 0.0
+
+    def _is_volatility_increasing(self, bb_results: Dict) -> bool:
+        """
+        Determina si la volatilidad está aumentando
+        """
+        try:
+            bandwidths = [
+                tf_data.get('bandwidth', 0)
+                for tf_data in bb_results.values()
+                if isinstance(tf_data, dict)
+            ]
+
+            if len(bandwidths) >= 2:
+                return bandwidths[-1] > bandwidths[-2]
+            return False
+
+        except Exception:
+            return False
+
+    def _validate_indicator_consistency(self, indicators: Dict) -> Dict:
+        """
+        Valida la consistencia entre diferentes indicadores
+        """
+        try:
+            consistency = {
+                'rsi_macd_aligned': False,
+                'trend_momentum_aligned': False,
+                'volume_confirms': False,
+                'score': 0.0
+            }
+
+            # Verificar alineación RSI-MACD
+            rsi_bullish = indicators['rsi'].get('weighted_value', 50) < 70
+            macd_bullish = indicators['macd'].get('trending_up', False)
+            consistency['rsi_macd_aligned'] = rsi_bullish == macd_bullish
+
+            # Verificar alineación tendencia-momentum
+            trend_bullish = indicators['trend'].get('direction', '') == 'bullish'
+            momentum_bullish = indicators['macd'].get('momentum_strength', 0) > 0
+            consistency['trend_momentum_aligned'] = trend_bullish == momentum_bullish
+
+            # Calcular score final
+            score = 0.0
+            if consistency['rsi_macd_aligned']:
+                score += 0.5
+            if consistency['trend_momentum_aligned']:
+                score += 0.5
+
+            consistency['score'] = score
+
+            return consistency
+
+        except Exception as e:
+            print(f"Error en _validate_indicator_consistency: {str(e)}")
+            return {'score': 0.0}
+
+    def _calculate_rsi(self, prices: List[float], period: int = 14) -> float:
+        """Calcula el RSI con manejo mejorado de errores y tipos de datos"""
+        try:
+            # Validación y conversión de entrada
+            if isinstance(prices[0], dict):
+                prices = [float(price['close']) for price in prices]
+            elif isinstance(prices[0], (list, tuple)):
+                prices = [float(price[4]) for price in prices]
+            else:
+                prices = [float(price) for price in prices]
+
+            if len(prices) < period + 1:
+                return 50.0
+
+            # Calcular cambios
+            deltas = []
+            for i in range(1, len(prices)):
+                deltas.append(prices[i] - prices[i-1])
+
+            # Separar ganancias y pérdidas
+            gains = []
+            losses = []
+            for delta in deltas:
+                if delta > 0:
+                    gains.append(delta)
+                    losses.append(0)
+                else:
+                    gains.append(0)
+                    losses.append(abs(delta))
+
+            # Calcular promedios
+            avg_gain = sum(gains[-period:]) / period
+            avg_loss = sum(losses[-period:]) / period
+
+            if avg_loss == 0:
+                return 100.0
+            if avg_gain == 0:
+                return 0.0
+
+            rs = avg_gain / avg_loss
+            rsi = 100.0 - (100.0 / (1.0 + rs))
+
+            return float(max(0.0, min(100.0, rsi)))
+
+        except Exception as e:
+            print(f"Error en _calculate_rsi: {str(e)}")
+            return 50.0
+
+    def analyze_entry_timing(self, symbol: str) -> TimingWindow:
+        """Analiza el mejor momento para entrar al mercado"""
+        try:
             # Obtener datos
-            candlesticks = self.client.get_klines(symbol, interval='1h', limit=100)
+            candlesticks = self.client.get_klines(symbol, interval='1h', limit=200)
             current_price = float(self.client.get_ticker_price(symbol)['price'])
+
+            if not candlesticks:
+                return TimingWindow(
+                    timing=EntryTiming.NOT_RECOMMENDED,
+                    timeframe="N/A",
+                    conditions=["No hay suficientes datos históricos"]
+                )
 
             # Análisis técnico
             technical = self._analyze_technical_indicators(candlesticks)
+
+            # Validar resultado del análisis técnico
+            if not technical.get('is_valid', False):
+                return TimingWindow(
+                    timing=EntryTiming.NOT_RECOMMENDED,
+                    timeframe="N/A",
+                    conditions=["Error en análisis técnico"]
+                )
+
             support_resistance = self._calculate_support_resistance(candlesticks)
             volatility = self._calculate_volatility(candlesticks)
 
@@ -1253,17 +2171,20 @@ class MarketAnalyzer:
             conditions = []
 
             # Verificar RSI
-            rsi = technical.get('rsi', 50)
-            if rsi <= 30:
+            rsi_value = technical.get('rsi', 50.0)
+            if isinstance(rsi_value, dict):
+                rsi_value = rsi_value.get('value', 50.0)
+
+            if rsi_value <= 30:
                 timing = EntryTiming.IMMEDIATE
                 timeframe = "0-4 horas"
                 confidence = 0.8
-                conditions.append(f"RSI en sobreventa ({rsi:.1f})")
-            elif rsi >= 70:
+                conditions.append(f"RSI en sobreventa ({rsi_value:.1f})")
+            elif rsi_value >= 70:
                 timing = EntryTiming.WAIT_DIP
                 timeframe = "12-24 horas"
                 confidence = 0.6
-                conditions.append(f"RSI en sobrecompra ({rsi:.1f})")
+                conditions.append(f"RSI en sobrecompra ({rsi_value:.1f})")
 
             # Verificar niveles de soporte/resistencia
             if support_resistance:
@@ -1278,7 +2199,6 @@ class MarketAnalyzer:
                         target_price = support * 1.01
                         confidence = 0.7
                         conditions.append(f"Precio cerca del soporte (${support:,.2f})")
-
                     # Precio cerca de la resistencia
                     elif current_price > resistance * 0.98:
                         timing = EntryTiming.WAIT_BREAKOUT
@@ -1286,7 +2206,6 @@ class MarketAnalyzer:
                         target_price = resistance * 1.02
                         confidence = 0.6
                         conditions.append(f"Precio cerca de resistencia (${resistance:,.2f})")
-
                     else:
                         timing = EntryTiming.WAIT_CONSOLIDATION
                         timeframe = "4-12 horas"
@@ -1314,6 +2233,59 @@ class MarketAnalyzer:
                 timeframe="N/A",
                 conditions=["Error en análisis"]
             )
+
+    def _analyze_technical_indicators(self, candlesticks: List[Dict]) -> Dict:
+        """Analiza los indicadores técnicos con mejor manejo de errores"""
+        try:
+            if not candlesticks or len(candlesticks) < 50:
+                return {
+                    'is_valid': False,
+                    'rsi': 50.0,
+                    'macd': {'trend': 'neutral', 'histogram': 0, 'crossover': 'none'},
+                    'bollinger': {'upper': 0, 'middle': 0, 'lower': 0}
+                }
+
+            # Extraer y validar datos
+            closes = []
+            for candle in candlesticks:
+                try:
+                    if isinstance(candle, (list, tuple)):
+                        closes.append(float(candle[4]))
+                    elif isinstance(candle, dict):
+                        closes.append(float(candle['close']))
+                except (IndexError, KeyError, ValueError) as e:
+                    print(f"Error procesando vela: {e}")
+                    continue
+
+            if len(closes) < 50:
+                return {
+                    'is_valid': False,
+                    'rsi': 50.0,
+                    'macd': {'trend': 'neutral', 'histogram': 0, 'crossover': 'none'},
+                    'bollinger': {'upper': 0, 'middle': 0, 'lower': 0}
+                }
+
+            # Calcular indicadores
+            rsi = self._calculate_rsi(closes[-14:])
+            macd = self._calculate_macd(closes)
+            bb = self._calculate_bollinger_bands(closes[-20:])
+
+            return {
+                'is_valid': True,
+                'rsi': float(rsi),
+                'macd': macd,
+                'bollinger': bb,
+                'last_price': closes[-1]
+            }
+
+        except Exception as e:
+            print(f"Error en análisis técnico: {str(e)}")
+            return {
+                'is_valid': False,
+                'rsi': 50.0,
+                'macd': {'trend': 'neutral', 'histogram': 0, 'crossover': 'none'},
+                'bollinger': {'upper': 0, 'middle': 0, 'lower': 0}
+            }
 
 
     def _calculate_volatility(self, candlesticks: List[Dict], period: int = 14) -> float:
@@ -1372,34 +2344,7 @@ class MarketAnalyzer:
 
         return ema
 
-    def _generate_recommendation(self, trend: MarketTrend, volume_analysis: Dict,
-                               momentum: Dict, rsi: float, timing: EntryTiming) -> Tuple[TradingSignal, SignalStrength, List[str]]:
-        """Genera una recomendación de trading basada en el análisis y timing"""
-        reasons = []
-        score = 0
 
-        # Si el timing no es favorable, ajustar la señal
-        if timing in [EntryTiming.WAIT_DIP, EntryTiming.WAIT_BREAKOUT, EntryTiming.WAIT_CONSOLIDATION]:
-            return TradingSignal.HOLD, SignalStrength.MODERATE, ["Esperando mejor punto de entrada"]
-
-        # Análisis de tendencia
-        if trend == MarketTrend.STRONG_UPTREND:
-            score += 2
-            reasons.append(f"Fuerte tendencia alcista")
-        elif trend == MarketTrend.UPTREND:
-            score += 1
-            reasons.append(f"Tendencia alcista")
-        elif trend == MarketTrend.STRONG_DOWNTREND:
-            score -= 2
-            reasons.append(f"Fuerte tendencia bajista")
-        elif trend == MarketTrend.DOWNTREND:
-            score -= 1
-            reasons.append(f"Tendencia bajista")
-
-        # Resto del análisis...
-        # ... (mantener el resto de la lógica)
-
-        return signal, strength, reasons
 
     def _calculate_support_resistance(self, candlesticks: List[Dict]) -> Dict:
         """Calcula niveles de soporte y resistencia"""
@@ -1586,102 +2531,6 @@ class MarketAnalyzer:
             print(ConsoleColors.error(f"Error calculando ATR: {str(e)}"))
             return 0.0
 
-    def _determine_timing(self, current_price: float, rsi: float, volume_analysis: Dict,
-                         support_resistance: Dict, volatility: float, pattern: Dict) -> Tuple[EntryTiming, str, float, float, List[str]]:
-        """Determina el mejor momento para entrar"""
-        conditions = []
-        confidence = 0.0
-        timing = EntryTiming.NOT_RECOMMENDED
-        timeframe = "12-24 horas"  # timeframe por defecto
-        target_price = current_price
-
-        try:
-            # Ajustar timeframes basados en volatilidad
-            high_volatility = volatility > self.timing_thresholds["high_volatility"]
-            timeframe_multiplier = 2 if high_volatility else 1
-
-            # Análisis de RSI
-            if rsi <= self.timing_thresholds["oversold_rsi"]:
-                timing = EntryTiming.IMMEDIATE
-                timeframe = "0-4 horas"
-                confidence += 0.3
-                conditions.append(f"RSI en sobreventa ({rsi:.2f})")
-            elif rsi >= self.timing_thresholds["overbought_rsi"]:
-                timing = EntryTiming.WAIT_DIP
-                timeframe = "12-24 horas"
-                confidence += 0.2
-                conditions.append(f"RSI en sobrecompra ({rsi:.2f})")
-            else:
-                timing = EntryTiming.WAIT_CONSOLIDATION
-                timeframe = "4-12 horas"
-                confidence += 0.1
-
-            # Análisis de volumen
-            if volume_analysis.get('is_significant', False):
-                confidence += 0.2
-                if volume_analysis.get('is_increasing', False):
-                    conditions.append("Volumen creciente")
-                    if timing != EntryTiming.WAIT_DIP:
-                        timing = EntryTiming.IMMEDIATE
-                        timeframe = "0-4 horas"
-                else:
-                    conditions.append("Alto volumen pero decreciente")
-
-            # Análisis de soporte/resistencia
-            support = support_resistance.get('support', 0)
-            resistance = support_resistance.get('resistance', 0)
-
-            if support > 0:
-                distance_to_support = (current_price - support) / support
-                if distance_to_support <= self.timing_thresholds["price_support"]:
-                    timing = EntryTiming.IMMEDIATE
-                    timeframe = "0-4 horas"
-                    target_price = support
-                    confidence += 0.25
-                    conditions.append(f"Precio cerca del soporte (${support:,.8f})")
-
-            if resistance > current_price:
-                distance_to_resistance = (resistance - current_price) / current_price
-                if distance_to_resistance <= self.timing_thresholds["price_resistance"]:
-                    timing = EntryTiming.WAIT_BREAKOUT
-                    timeframe = "6-12 horas"
-                    target_price = resistance * 1.02
-                    confidence += 0.15
-                    conditions.append(f"Precio cerca de resistencia (${resistance:,.8f})")
-
-            # Análisis de volatilidad
-            if high_volatility:
-                timeframe = self._adjust_timeframe(timeframe, timeframe_multiplier)
-                conditions.append(f"Alta volatilidad ({volatility:.1%})")
-                confidence -= 0.1
-            else:
-                conditions.append(f"Baja volatilidad ({volatility:.1%})")
-                confidence += 0.1
-
-            # Análisis de patrones
-            if pattern and pattern.get('patterns'):
-                pattern_type = pattern['patterns'][0]['type']
-                pattern_name = pattern['patterns'][0]['name']
-                if pattern_type == 'bullish':
-                    if timing != EntryTiming.IMMEDIATE:
-                        timing = EntryTiming.WAIT_BREAKOUT
-                        timeframe = "4-8 horas"
-                    confidence += 0.2
-                    conditions.append(f"Patrón alcista: {pattern_name}")
-                elif pattern_type == 'bearish':
-                    timing = EntryTiming.WAIT_DIP
-                    timeframe = "12-24 horas"
-                    confidence -= 0.1
-                    conditions.append(f"Patrón bajista: {pattern_name}")
-
-            # Ajustar confianza final
-            confidence = min(max(confidence, 0.0), 1.0)
-
-        except Exception as e:
-            print(ConsoleColors.error(f"Error en determine_timing: {str(e)}"))
-            return EntryTiming.NOT_RECOMMENDED, "N/A", current_price, 0.0, ["Error en análisis"]
-
-        return timing, timeframe, target_price, confidence, conditions
 
     def _adjust_timeframe(self, timeframe: str, multiplier: float) -> str:
         """Ajusta el timeframe según el multiplicador"""
@@ -1806,55 +2655,7 @@ class MarketAnalyzer:
 
 
 
-    def _generate_technical_reason(self, macd: Dict, rsi: float, bb: Dict, price: float) -> str:
-        """Genera razones detalladas del análisis técnico"""
-        reasons = []
 
-        if macd['crossover'] == 'bullish':
-            reasons.append(f"Cruce alcista del MACD (Histograma: {macd['histogram']:.8f})")
-
-        if rsi <= self.strategy_params["rsi_params"]["oversold"]:
-            reasons.append(f"RSI en sobreventa ({rsi:.2f})")
-        elif rsi >= self.strategy_params["rsi_params"]["overbought"]:
-            reasons.append(f"RSI en sobrecompra ({rsi:.2f})")
-
-        if price <= bb['lower']:
-            reasons.append("Precio tocando banda inferior de Bollinger")
-        elif price >= bb['upper']:
-            reasons.append("Precio tocando banda superior de Bollinger")
-
-        return " | ".join(reasons)
-
-    def _generate_trade_recommendation(self, trend_analysis: Dict, technical_analysis: Dict,
-                                     candle_patterns: Dict, trade_levels: Dict,
-                                     market_conditions: Dict) -> TradeRecommendation:
-        """Genera la recomendación final de trading"""
-        try:
-            if not trade_levels or trade_levels['risk_reward_ratio'] < 2:
-                return self._generate_hold_recommendation(
-                    "Ratio riesgo/beneficio insuficiente",
-                    float(self.client.get_ticker_price(symbol)['price'])
-                )
-
-            reasons = [
-                f"Tendencia alcista confirmada en múltiples timeframes",
-                technical_analysis['reason'],
-                f"Patrón de velas: {candle_patterns['pattern_name']}",
-                f"Ratio Riesgo/Beneficio: 1:{trade_levels['risk_reward_ratio']:.1f}"
-            ]
-
-            return TradeRecommendation(
-                signal=TradingSignal.BUY,
-                strength=SignalStrength.STRONG,
-                reasons=reasons,
-                entry_price=trade_levels['entry'],
-                stop_loss=trade_levels['stop_loss'],
-                take_profit=trade_levels['take_profit_2']
-            )
-
-        except Exception as e:
-            print(ConsoleColors.error(f"Error generando recomendación: {str(e)}"))
-            return self._generate_hold_recommendation(str(e), current_price)
 
     def _analyze_candle_patterns(self, candlesticks: List[Dict]) -> Dict:
         """Analiza patrones de velas japonesas"""
@@ -2028,60 +2829,544 @@ class MarketAnalyzer:
             print(f"Error generando razones: {str(e)}")
             return ["Error en análisis"]
 
-    def _determine_timing_window(self, current_price, technical, levels, volatility):
-        """
-        Determina la ventana de timing óptima
-        """
+
+    def calculate_position_sizes(self, capital: float, current_price: float) -> Dict:
+        """Calcula los tamaños de posición para cada nivel"""
         try:
-            conditions = []
+            risk_amount = capital * (self.strategy_params["risk_params"]["max_risk_percent"] / 100)
+            position_sizes = []
 
-            # Analizar RSI
-            rsi = technical.get('rsi', 50)
-            if rsi < 30:
-                timing = EntryTiming.IMMEDIATE
-                timeframe = "0-4 horas"
-                confidence = 0.8
-                conditions.append(f"RSI en sobreventa ({rsi:.1f})")
-            elif rsi > 70:
-                timing = EntryTiming.WAIT_DIP
-                timeframe = "12-24 horas"
-                confidence = 0.6
-                conditions.append(f"RSI en sobrecompra ({rsi:.1f})")
+            for tp_level in self.strategy_params["risk_params"]["take_profit_levels"]:
+                size = risk_amount * tp_level["size"]
+                position_sizes.append({
+                    "size": size / current_price,
+                    "take_profit": current_price * tp_level["ratio"]
+                })
 
-            # Analizar niveles
-            support = levels.get('support')
-            resistance = levels.get('resistance')
+            return {
+                "position_sizes": position_sizes,
+                "total_size": sum(p["size"] for p in position_sizes)
+            }
+        except Exception as e:
+            print(f"Error calculando tamaños de posición: {e}")
+            return None
 
-            if support and (current_price - support) / support < 0.02:
-                if timing != EntryTiming.WAIT_DIP:
-                    timing = EntryTiming.IMMEDIATE
-                    timeframe = "0-4 horas"
-                    confidence = 0.7
-                conditions.append(f"Precio cerca del soporte (${support:.2f})")
-                target_price = support * 1.01
+    def calculate_exit_levels(self, entry_price: float, stop_loss: float) -> Dict:
+        """Calcula los niveles de salida basados en el riesgo"""
+        try:
+            risk = entry_price - stop_loss
+            levels = []
 
-            elif resistance and (resistance - current_price) / current_price < 0.02:
-                timing = EntryTiming.WAIT_BREAKOUT
-                timeframe = "6-12 horas"
-                confidence = 0.6
-                conditions.append(f"Precio cerca de resistencia (${resistance:.2f})")
-                target_price = resistance * 1.02
+            for tp_level in self.strategy_params["risk_params"]["take_profit_levels"]:
+                take_profit = entry_price + (risk * tp_level["ratio"])
+                levels.append({
+                    "price": take_profit,
+                    "size": tp_level["size"],
+                    "ratio": tp_level["ratio"]
+                })
 
-            else:
-                timing = EntryTiming.WAIT_CONSOLIDATION
-                timeframe = "4-12 horas"
-                confidence = 0.4
-                target_price = current_price
+            return {
+                "entry_price": entry_price,
+                "stop_loss": stop_loss,
+                "take_profit_levels": levels,
+                "breakeven_price": entry_price + (risk * self.strategy_params["risk_params"]["stop_loss"]["breakeven"]),
+                "trailing_activation": entry_price + (risk * self.strategy_params["risk_params"]["stop_loss"]["trailing"]["activation"])
+            }
+        except Exception as e:
+            print(f"Error calculando niveles de salida: {e}")
+            return None
 
-            # Ajustar por volatilidad
-            if volatility > 0.05:  # Alta volatilidad
-                confidence *= 0.8
-                conditions.append(f"Alta volatilidad ({volatility:.1%})")
-            else:
-                conditions.append(f"Baja volatilidad ({volatility:.1%})")
+    def update_trailing_stop(self, current_price: float, high_price: float,
+                           entry_price: float, current_stop: float) -> float:
+        """Actualiza el trailing stop dinámicamente"""
+        try:
+            # Calcular distancia inicial
+            initial_risk = entry_price - current_stop
+            activation_level = entry_price + (initial_risk * self.strategy_params["risk_params"]["stop_loss"]["trailing"]["activation"])
 
-            return timing, timeframe, target_price, confidence, conditions
+            # Si el precio no ha alcanzado el nivel de activación, mantener stop actual
+            if high_price < activation_level:
+                return current_stop
+
+            # Calcular nuevo trailing stop
+            trailing_distance = current_price * self.strategy_params["risk_params"]["stop_loss"]["trailing"]["step"]
+            new_stop = current_price - trailing_distance
+
+            # Retornar el mayor entre el nuevo stop y el actual
+            return max(new_stop, current_stop)
 
         except Exception as e:
-            print(f"Error en determine_timing_window: {str(e)}")
-            return EntryTiming.NOT_RECOMMENDED, "N/A", current_price, 0.0, ["Error en análisis"]
+            print(f"Error actualizando trailing stop: {e}")
+            return current_stop
+
+    def should_take_profit(self, current_price: float, entry_price: float,
+                          position_size: float, profits_taken: List[float]) -> Optional[float]:
+        """Determina si se debe tomar beneficios y qué cantidad"""
+        try:
+            current_profit = (current_price - entry_price) / entry_price
+
+            for i, tp_level in enumerate(self.strategy_params["risk_params"]["take_profit_levels"]):
+                # Verificar si este nivel ya fue tomado
+                if i < len(profits_taken):
+                    continue
+
+                target_profit = tp_level["ratio"]
+                if current_profit >= target_profit:
+                    return position_size * tp_level["size"]
+
+            return None
+
+        except Exception as e:
+            print(f"Error evaluando toma de beneficios: {e}")
+            return None
+
+    def should_move_stop_loss(self, current_price: float, entry_price: float,
+                            current_stop: float, high_price: float) -> Optional[float]:
+        """Determina si se debe mover el stop loss y a qué nivel"""
+        try:
+            profit_percent = (current_price - entry_price) / entry_price
+            initial_risk = entry_price - current_stop
+
+            # Mover a breakeven
+            breakeven_target = self.strategy_params["risk_params"]["stop_loss"]["breakeven"]
+            if profit_percent >= breakeven_target and current_stop < entry_price:
+                return entry_price + (initial_risk * 0.1)  # Breakeven + 10% del riesgo inicial
+
+            # Actualizar trailing stop
+            if profit_percent >= self.strategy_params["risk_params"]["stop_loss"]["trailing"]["activation"]:
+                return self.update_trailing_stop(current_price, high_price, entry_price, current_stop)
+
+            return current_stop
+
+        except Exception as e:
+            print(f"Error evaluando stop loss: {e}")
+            return current_stop
+
+    def validate_exit_conditions(self, current_price: float, entry_price: float,
+                               technical_indicators: Dict) -> Tuple[bool, str]:
+        """Valida condiciones adicionales de salida"""
+        try:
+            # Obtener indicadores
+            rsi = technical_indicators.get('rsi', 50)
+            volume_ratio = technical_indicators.get('volume_ratio', 1.0)
+            trend_strength = technical_indicators.get('trend_strength', 0.5)
+
+            # Verificar condiciones de salida
+            if rsi >= self.strategy_params["thresholds"]["exit_conditions"]["rsi_overbought"]:
+                return True, "RSI en sobrecompra"
+
+            if trend_strength < self.strategy_params["thresholds"]["exit_conditions"]["trend_reversal"]:
+                return True, "Debilitamiento de tendencia"
+
+            if volume_ratio < self.strategy_params["thresholds"]["exit_conditions"]["volume_drop"]:
+                return True, "Caída significativa de volumen"
+
+            return False, ""
+
+        except Exception as e:
+            print(f"Error validando condiciones de salida: {e}")
+            return False, "Error en validación"
+
+
+    def _calculate_technical_score(self, trend_analysis: Dict, technical_analysis: Dict) -> float:
+        """Calcula score basado en análisis técnico"""
+        try:
+            score = 0.0
+            weight = 0.0
+
+            # Evaluar tendencia
+            if trend_analysis.get('trend'):
+                trend_strength = trend_analysis.get('strength', 0)
+                if trend_analysis['trend'] == 'bullish':
+                    score += trend_strength * 0.4
+                elif trend_analysis['trend'] == 'bearish':
+                    score -= trend_strength * 0.4
+                weight += 0.4
+
+            # Evaluar RSI
+            rsi = technical_analysis.get('rsi', 50)
+            if rsi <= 30:  # Sobreventa
+                score += 0.3
+            elif rsi >= 70:  # Sobrecompra
+                score -= 0.3
+            weight += 0.3
+
+            # Evaluar MACD
+            macd = technical_analysis.get('macd', {})
+            if macd.get('crossover') == 'bullish':
+                score += 0.3
+            elif macd.get('crossover') == 'bearish':
+                score -= 0.3
+            weight += 0.3
+
+            return (score / weight + 1) / 2 if weight > 0 else 0.5
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error calculando technical score: {str(e)}"))
+            return 0.5
+
+    def _calculate_volume_score(self, volume_analysis: Dict) -> float:
+        """Calcula score basado en análisis de volumen"""
+        try:
+            score = 0.0
+            weight = 0.0
+
+            # Evaluar ratio de volumen
+            if 'ratio' in volume_analysis:
+                volume_score = min(volume_analysis['ratio'] / 2, 1.0)
+                score += volume_score * 0.6
+                weight += 0.6
+
+            # Evaluar tendencia de volumen
+            if volume_analysis.get('is_increasing'):
+                score += 0.4
+                weight += 0.4
+
+            return score / weight if weight > 0 else 0.5
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error calculando volume score: {str(e)}"))
+            return 0.5
+
+    def _calculate_momentum_score(self, technical_analysis: Dict) -> float:
+        """Calcula score basado en momentum"""
+        try:
+            score = 0.0
+            weight = 0.0
+
+            # Evaluar RSI momentum
+            rsi = technical_analysis.get('rsi', 50)
+            rsi_score = (rsi - 50) / 50  # Normalizar a [-1, 1]
+            score += (rsi_score + 1) / 2 * 0.4  # Convertir a [0, 1]
+            weight += 0.4
+
+            # Evaluar MACD momentum
+            macd = technical_analysis.get('macd', {})
+            if macd.get('trending_up'):
+                score += 0.3
+            weight += 0.3
+
+            # Evaluar Bollinger Bands
+            bb = technical_analysis.get('bollinger', {})
+            if bb:
+                price = technical_analysis.get('last_price', 0)
+                upper = bb.get('upper', price)
+                lower = bb.get('lower', price)
+
+                if price > upper:
+                    score += 0.3
+                elif price < lower:
+                    score -= 0.3
+                weight += 0.3
+
+            return max(0, min(1, score / weight)) if weight > 0 else 0.5
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error calculando momentum score: {str(e)}"))
+            return 0.5
+
+
+
+    # def analyze_new_listings(self, days: int = 7, limit: int = 10) -> List[Dict]:
+    #     """Analiza nuevas criptomonedas en el mercado de forma dinámica"""
+    #     try:
+    #         # Obtener nuevos listings
+    #         new_listings = self.cmc_client.get_new_listings(days, limit)
+
+    #         analyzed_listings = []
+    #         for listing in new_listings:
+    #             try:
+    #                 symbol = f"{listing['symbol']}USDT"
+
+    #                 # Análisis completo si está en Binance
+    #                 if self.client.is_valid_symbol(symbol):
+    #                     recommendation = self.analyze_trading_opportunity(symbol)
+    #                     market_data = self._get_market_data(symbol)
+
+    #                     analyzed_listings.append({
+    #                         **listing,
+    #                         'trading_recommendation': recommendation,
+    #                         'market_data': market_data,
+    #                         'analysis_summary': self._generate_listing_summary(listing, recommendation, market_data),
+    #                         'risk_metrics': self._calculate_risk_metrics(listing, market_data),
+    #                         'trading_metrics': {
+    #                             'binance_available': True,
+    #                             'volume_24h': market_data.get('volume_24h', 0),
+    #                             'price_change': market_data.get('price_change_24h', 0),
+    #                             'volatility': market_data.get('volatility', 0)
+    #                         }
+    #                     })
+    #             except Exception as e:
+    #                 print(ConsoleColors.warning(f"Error analizando {listing['symbol']}: {str(e)}"))
+    #                 continue
+
+    #         # Ordenar por potencial y riesgo
+    #         return self._sort_analyzed_listings(analyzed_listings)
+
+    #     except Exception as e:
+    #         print(ConsoleColors.error(f"Error analizando nuevos listings: {str(e)}"))
+    #         return []
+
+    def _generate_listing_summary(self, listing: Dict, recommendation, market_data: Dict) -> Dict:
+        """Genera un resumen del análisis para nuevos listings"""
+        try:
+            return {
+                'potential_score': self._calculate_potential_score(listing, market_data),
+                'risk_level': self._calculate_risk_level(listing, market_data),
+                'recommendation': 'FAVORABLE' if recommendation and recommendation.signal.value == 'COMPRAR' else 'DESFAVORABLE',
+                'key_metrics': {
+                    'market_cap': listing['market_cap'],
+                    'volume_ratio': market_data.get('volume_24h', 0) / listing['volume_24h'] if listing['volume_24h'] else 0,
+                    'price_stability': self._calculate_price_stability(market_data)
+                },
+                'warning_flags': self._get_warning_flags(listing, market_data)
+            }
+        except Exception as e:
+            print(ConsoleColors.error(f"Error generando resumen: {str(e)}"))
+            return {}
+
+    def _calculate_risk_metrics(self, listing: Dict, market_data: Dict) -> Dict:
+        """Calcula métricas de riesgo detalladas"""
+        try:
+            volatility = market_data.get('volatility', 0)
+            volume_24h = market_data.get('volume_24h', 0)
+            price_change = market_data.get('price_change_24h', 0)
+
+            return {
+                'volatility_risk': min(volatility / 0.1, 1.0),  # Normalizado a 10%
+                'volume_risk': 1.0 - min(volume_24h / 1000000, 1.0),  # Normalizado a $1M
+                'price_stability_risk': min(abs(price_change) / 50, 1.0),  # Normalizado a 50%
+                'market_cap_risk': 1.0 - min(listing['market_cap'] / 10000000, 1.0),  # Normalizado a $10M
+                'overall_risk': self._calculate_overall_risk(listing, market_data)
+            }
+        except Exception as e:
+            print(ConsoleColors.error(f"Error calculando métricas de riesgo: {str(e)}"))
+            return {}
+
+    def _sort_analyzed_listings(self, listings: List[Dict]) -> List[Dict]:
+        """Ordena los listings analizados por potencial y riesgo"""
+        try:
+            return sorted(
+                listings,
+                key=lambda x: (
+                    x['analysis_summary']['potential_score'],
+                    -x['risk_metrics']['overall_risk']
+                ),
+                reverse=True
+            )
+        except Exception as e:
+            print(ConsoleColors.error(f"Error ordenando listings: {str(e)}"))
+            return listings
+
+    def _calculate_potential_score(self, listing: Dict, market_data: Dict) -> float:
+        """Calcula score de potencial de una nueva listing"""
+        try:
+            # Factores positivos
+            volume_score = min(market_data.get('volume_24h', 0) / 1000000, 1.0) * 0.3
+            market_cap_score = min(listing['market_cap'] / 10000000, 1.0) * 0.2
+
+            # Factor de crecimiento (basado en cambio de precio)
+            price_change = abs(market_data.get('price_change_24h', 0))
+            growth_score = min(price_change / 100, 1.0) * 0.3 if price_change > 0 else 0
+
+            # Factor de estabilidad
+            stability_score = self._calculate_price_stability(market_data) * 0.2
+
+            return volume_score + market_cap_score + growth_score + stability_score
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error calculando score de potencial: {str(e)}"))
+            return 0.0
+
+    def _calculate_price_stability(self, market_data: Dict) -> float:
+        """Calcula la estabilidad del precio"""
+        try:
+            volatility = market_data.get('volatility', 0)
+            return max(0, 1 - (volatility / 0.2))  # 20% volatilidad máxima considerada
+        except Exception:
+            return 0.0
+
+    def _get_warning_flags(self, listing: Dict, market_data: Dict) -> List[str]:
+        """Identifica señales de advertencia"""
+        flags = []
+
+        try:
+            # Volatilidad excesiva
+            if market_data.get('volatility', 0) > 0.2:
+                flags.append("Alta volatilidad")
+
+            # Volumen bajo
+            if market_data.get('volume_24h', 0) < 100000:
+                flags.append("Volumen bajo")
+
+            # Cambio de precio extremo
+            if abs(market_data.get('price_change_24h', 0)) > 50:
+                flags.append("Movimiento de precio extremo")
+
+            # Market cap muy bajo
+            if listing['market_cap'] < 1000000:
+                flags.append("Market cap muy bajo")
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error obteniendo warning flags: {str(e)}"))
+
+        return flags
+
+    def analyze_new_listings(self, days: int = 7, limit: int = 50, min_volume: float = 100000, max_mcap: float = 10000000) -> List[Dict]:
+        """
+        Analiza nuevas criptomonedas en el mercado con criterios específicos para gems
+
+        Args:
+            days: Número de días hacia atrás para buscar
+            limit: Número máximo de resultados
+            min_volume: Volumen mínimo en 24h (USD)
+            max_mcap: Capitalización de mercado máxima (USD)
+        """
+        try:
+            # Obtener nuevos listings
+            new_listings = self.cmc_client.get_new_listings(days, limit * 2)  # Pedir más para filtrar
+
+            analyzed_listings = []
+            for listing in new_listings:
+                try:
+                    # Aplicar filtros básicos primero
+                    if (listing['volume_24h'] < min_volume or
+                        listing['market_cap'] > max_mcap):
+                        continue
+
+                    symbol = f"{listing['symbol']}USDT"
+
+                    # Verificar disponibilidad en Binance
+                    if not self.client.is_valid_symbol(symbol):
+                        continue
+
+                    # Obtener datos adicionales
+                    market_data = self._get_market_data(symbol)
+                    social_data = self.cmc_client.get_social_stats(listing['symbol'])
+
+                    # Enriquecer datos del listing
+                    enriched_listing = {
+                        **listing,
+                        'market_data': market_data,
+                        'social_metrics': social_data,
+                        'availability': {
+                            'binance': True,
+                            'contract_verified': self._verify_contract(listing['symbol']),
+                            'is_audited': self._check_audit_status(listing['symbol'])
+                        },
+                        'community_metrics': self._get_community_metrics(listing['symbol']),
+                        'risk_metrics': self._analyze_listing_risk(listing, market_data)
+                    }
+
+                    analyzed_listings.append(enriched_listing)
+
+                except Exception as e:
+                    print(ConsoleColors.warning(f"Error analizando {listing['symbol']}: {str(e)}"))
+                    continue
+
+            # Ordenar por potencial (volumen y engagement)
+            return sorted(
+                analyzed_listings,
+                key=lambda x: (
+                    x['volume_24h'],
+                    x.get('social_metrics', {}).get('social_score', 0)
+                ),
+                reverse=True
+            )[:limit]
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error analizando nuevos listings: {str(e)}"))
+            return []
+
+    def _verify_contract(self, symbol: str) -> bool:
+        """Verifica si el contrato está verificado"""
+        # Implementar verificación real aquí
+        return True
+
+    def _check_audit_status(self, symbol: str) -> bool:
+        """Verifica si el proyecto está auditado"""
+        # Implementar verificación real aquí
+        return True
+
+    def _get_community_metrics(self, symbol: str) -> Dict:
+        """Obtiene métricas detalladas de la comunidad"""
+        try:
+            social_data = self.cmc_client.get_social_stats(symbol)
+            return {
+                'twitter_followers': social_data.get('twitter_followers', 0),
+                'telegram_members': social_data.get('telegram_members', 0),
+                'discord_members': social_data.get('discord_members', 0),
+                'social_engagement': social_data.get('social_score', 0),
+                'growth_rate': social_data.get('growth_rate', 0)
+            }
+        except Exception:
+            return {}
+
+    def _analyze_listing_risk(self, listing: Dict, market_data: Dict) -> Dict:
+        """Analiza riesgos específicos de nuevos listings"""
+        try:
+            risk_analysis = {
+                'volatility_risk': self._calculate_volatility_risk(market_data),
+                'liquidity_risk': self._calculate_liquidity_risk(market_data),
+                'concentration_risk': self._calculate_concentration_risk(listing),
+                'overall_risk': 0.0
+            }
+
+            # Calcular riesgo general
+            risk_scores = [
+                risk_analysis['volatility_risk'] * 0.4,
+                risk_analysis['liquidity_risk'] * 0.3,
+                risk_analysis['concentration_risk'] * 0.3
+            ]
+            risk_analysis['overall_risk'] = sum(risk_scores)
+
+            return risk_analysis
+
+        except Exception:
+            return {
+                'volatility_risk': 1.0,
+                'liquidity_risk': 1.0,
+                'concentration_risk': 1.0,
+                'overall_risk': 1.0
+            }
+
+    def _calculate_volatility_risk(self, market_data: Dict) -> float:
+        """Calcula el riesgo basado en volatilidad"""
+        try:
+            volatility = market_data.get('volatility_7d', 0)
+            return min(volatility / 0.5, 1.0)  # Normalizar a 50% de volatilidad
+        except Exception:
+            return 1.0
+
+    def _calculate_liquidity_risk(self, market_data: Dict) -> float:
+        """Calcula el riesgo basado en liquidez"""
+        try:
+            volume = market_data.get('volume_24h', 0)
+            return max(1 - (volume / 1000000), 0.0)  # Normalizar a $1M
+        except Exception:
+            return 1.0
+
+    def _calculate_concentration_risk(self, listing: Dict) -> float:
+        """Calcula el riesgo basado en concentración de holders"""
+        try:
+            top_holders = listing.get('top_holders_percentage', 100)
+            return min(top_holders / 100, 1.0)
+        except Exception:
+            return 1.0
+
+    def _get_market_data(self, symbol: str) -> Dict:
+        """Obtiene datos detallados del mercado"""
+        try:
+            ticker = self.client.get_ticker_24h(symbol)
+            market_metrics = self.client.calculate_market_metrics(symbol)
+
+            return {
+                'price': float(ticker['lastPrice']) if ticker else 0,
+                'volume_24h': float(ticker['volume']) if ticker else 0,
+                'price_change_24h': float(ticker['priceChangePercent']) if ticker else 0,
+                'volatility_7d': market_metrics.get('volatility_7d', 0),
+                'high_24h': float(ticker['highPrice']) if ticker else 0,
+                'low_24h': float(ticker['lowPrice']) if ticker else 0
+            }
+        except Exception:
+            return {}

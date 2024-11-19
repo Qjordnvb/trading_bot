@@ -13,6 +13,9 @@ class BinanceClient:
         self.api_key = api_key
         self.api_secret = api_secret
         self.base_url = "https://api.binance.com/api/v3"
+        self.valid_symbols = set()
+        self.failed_symbols = set()  # Cache para símbolos inválidos
+        self._initialize_valid_symbols()
 
     def _generate_signature(self, params: Dict) -> str:
         query_string = urllib.parse.urlencode(params)
@@ -114,3 +117,50 @@ class BinanceClient:
         except Exception as e:
             print(ConsoleColors.error(f"Error calculando métricas para {symbol}: {str(e)}"))
             return {}
+
+    def _initialize_valid_symbols(self):
+        """Inicializa el conjunto de símbolos válidos de Binance"""
+        try:
+            # Intentar obtener información de exchange
+            response = self._make_request("GET", "/exchangeInfo")
+            if not response:
+                print(ConsoleColors.warning("No se pudo obtener información del exchange"))
+                return
+
+            # Filtrar por símbolos activos que terminan en USDT
+            self.valid_symbols = {
+                s['symbol'] for s in response.get('symbols', [])
+                if s.get('status') == 'TRADING' and
+                s.get('symbol', '').endswith('USDT')
+            }
+
+            if not self.valid_symbols:
+                print(ConsoleColors.warning("No se encontraron símbolos válidos"))
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error inicializando símbolos válidos: {str(e)}"))
+
+    def is_valid_symbol(self, symbol: str) -> bool:
+        """Verifica si un símbolo es válido antes de hacer requests"""
+        # Primero verificar cache de símbolos fallidos
+        if symbol in self.failed_symbols:
+            return False
+
+        # Si el símbolo está en valid_symbols, es válido
+        if symbol in self.valid_symbols:
+            return True
+
+        # Si no tenemos símbolos válidos, intentar reinicializar
+        if not self.valid_symbols:
+            self._initialize_valid_symbols()
+            return symbol in self.valid_symbols
+
+        # Si llegamos aquí, el símbolo es inválido
+        self.failed_symbols.add(symbol)
+        return False
+
+    def get_valid_symbols(self) -> List[str]:
+        """Retorna la lista de símbolos válidos"""
+        if not self.valid_symbols:
+            self._initialize_valid_symbols()
+        return sorted(list(self.valid_symbols))
