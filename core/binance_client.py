@@ -4,7 +4,7 @@ import time
 import hmac
 import hashlib
 import urllib.parse
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Optional
 import numpy as np
 from utils.console_colors import ConsoleColors
 
@@ -57,30 +57,54 @@ class BinanceClient:
         params = {"symbol": symbol} if symbol else {}
         return self._make_request("GET", "/ticker/24hr", params=params)
 
-    def get_klines(self, symbol: str, interval: str = "1h", limit: int = 100) -> List[Dict]:
-        params = {
-            "symbol": symbol,
-            "interval": interval,
-            "limit": limit
-        }
-        data = self._make_request("GET", "/klines", params=params)
+    def get_klines(self, symbol: str, interval: str = "1h", limit: int = 100, start_time: Optional[int] = None, end_time: Optional[int] = None) -> List[Dict]:
+        try:
+            params = {
+                "symbol": symbol,
+                "interval": interval,
+                "limit": limit
+            }
 
-        formatted_data = []
-        for candle in data:
-            formatted_data.append({
-                "timestamp": candle[0],
-                "open": float(candle[1]),
-                "high": float(candle[2]),
-                "low": float(candle[3]),
-                "close": float(candle[4]),
-                "volume": float(candle[5]),
-                "close_time": candle[6],
-                "quote_volume": float(candle[7]),
-                "trades": int(candle[8]),
-                "taker_buy_base_volume": float(candle[9]),
-                "taker_buy_quote_volume": float(candle[10])
-            })
-        return formatted_data
+            if start_time:
+                params["startTime"] = start_time
+            if end_time:
+                params["endTime"] = end_time
+
+            response = self._make_request("GET", "/klines", params=params)
+
+            if not response:
+                print(ConsoleColors.warning(f"No hay datos para {symbol}"))
+                return []
+
+            formatted_data = []
+            for candle in response:
+                try:
+                    # Verificar que el candle tenga todos los datos necesarios
+                    if len(candle) < 11:
+                        continue
+
+                    formatted_data.append({
+                        "timestamp": int(candle[0]),
+                        "open": float(candle[1]),
+                        "high": float(candle[2]),
+                        "low": float(candle[3]),
+                        "close": float(candle[4]),
+                        "volume": float(candle[5]),
+                        "close_time": int(candle[6]),
+                        "quote_volume": float(candle[7]),
+                        "trades": int(candle[8]),
+                        "taker_buy_base_volume": float(candle[9]),
+                        "taker_buy_quote_volume": float(candle[10])
+                    })
+                except (IndexError, ValueError) as e:
+                    print(ConsoleColors.warning(f"Error formateando vela: {str(e)}"))
+                    continue
+
+            return formatted_data
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error obteniendo klines para {symbol}: {str(e)}"))
+            return []
 
     def get_ticker_price(self, symbol: str = None) -> Union[List, Dict]:
         params = {"symbol": symbol} if symbol else {}

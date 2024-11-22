@@ -1,10 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from config import config
 from core.binance_client import BinanceClient
 from core.coinmarketcap_client import CoinMarketCapClient
 from core.market_analyzer import MarketAnalyzer
 from core.meme_analyzer import MemeCoinAnalyzer
+from backtesting.backtest_testing import BacktestSystem
 from alerts.alert_manager import AlertManager
 from alerts.notifications import WhatsAppNotifier, MockNotifier
 from monitor.market_monitor import MarketMonitor
@@ -21,6 +22,13 @@ class TradingBot:
         self.market_opportunities: List[Dict] = []
         self.meme_coins: List[Dict] = []
         self.new_listings: List[Dict] = []
+
+        # self.backtest_system = BacktestSystem(
+        #     market_analyzer=self.market_analyzer,
+        #     meme_analyzer=self.meme_analyzer,
+        #     client=self.client,
+        #     config=config
+        # )
 
     def _initialize_client(self) -> BinanceClient:
         return BinanceClient(config.BINANCE_API_KEY, config.BINANCE_API_SECRET)
@@ -71,6 +79,50 @@ class TradingBot:
             print(ConsoleColors.error(traceback.format_exc()))
         finally:
             print(ConsoleColors.header("\n=== ANÁLISIS COMPLETADO ===\n"))
+
+    # def run(self):
+    #     print(ConsoleColors.header("\n=== ANÁLISIS DE MERCADO CRYPTO ==="))
+    #     print(ConsoleColors.info("Fecha y hora: ") +
+    #           ConsoleColors.highlight(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
+    #     try:
+    #         # Ejecutar backtesting primero con fechas más cortas
+    #         current_date = datetime.now()
+    #         end_date = current_date.strftime("%Y-%m-%d")
+    #         start_date = (current_date - timedelta(days=30)).strftime("%Y-%m-%d")  # últimos 30 días
+
+    #         backtest_results = self.run_backtest(
+    #             symbol="BTCUSDT",
+    #             start_time=start_date,
+    #             end_time=end_date,
+    #             initial_capital=10000.0
+    #         )
+
+    #         # Si el backtest es exitoso, ejecutar el bot
+    #         if backtest_results and backtest_results['metrics'].get('overall_score', 0) >= 0.7:
+    #             # Obtener y analizar oportunidades de mercado
+    #             self._analyze_market_opportunities()
+
+    #             # Analizar meme coins
+    #             self._analyze_meme_coins()
+
+    #             # Analizar nuevas listings
+    #             self._analyze_new_listings()
+
+    #             # Iniciar monitoreo
+    #             self._start_monitoring()
+    #         else:
+    #             print(ConsoleColors.warning("\nOptimiza la estrategia antes de ejecutar el bot en vivo"))
+
+    #     except KeyboardInterrupt:
+    #         print(ConsoleColors.warning("\nDetención manual del bot"))
+    #     except Exception as e:
+    #         print(ConsoleColors.error(f"\nError en ejecución: {str(e)}"))
+    #         import traceback
+    #         print(ConsoleColors.error(traceback.format_exc()))
+    #     finally:
+    #         self.cleanup()
+    #         print(ConsoleColors.header("\n=== ANÁLISIS COMPLETADO ===\n"))
 
     def _analyze_market_opportunities(self):
         print(ConsoleColors.header("\n=== ANÁLISIS DE OPORTUNIDADES DE MERCADO ==="))
@@ -714,6 +766,130 @@ class TradingBot:
         except Exception as e:
             print(ConsoleColors.error(f"Error en limpieza: {str(e)}"))
 
+    def run_backtest(self, symbol: str, start_time: str, end_time: str, initial_capital: float = 10000.0):
+        """
+        Ejecuta el backtesting para un símbolo específico
+        """
+        print(ConsoleColors.header(f"\n=== INICIANDO BACKTEST PARA {symbol} ==="))
+        try:
+            results = self.backtest_system.run_backtest(
+                symbol=symbol,
+                start_time=start_time,
+                end_time=end_time,
+                initial_capital=initial_capital
+            )
+
+            # Analizar resultados
+            if results['metrics'].get('overall_score', 0) >= 0.7:
+                print(ConsoleColors.success("\n✓ Estrategia validada con éxito"))
+                self._setup_validated_strategy(symbol, results)
+            else:
+                print(ConsoleColors.warning("\n⚠️ La estrategia necesita optimización"))
+                self._suggest_strategy_improvements(results)
+
+            return results
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error en backtesting: {str(e)}"))
+            return None
+
+    def _setup_validated_strategy(self, symbol: str, backtest_results: Dict):
+        """
+        Configura la estrategia validada para trading en vivo
+        """
+        try:
+            # Extraer parámetros optimizados
+            optimal_params = backtest_results.get('optimal_parameters', {})
+
+            # Actualizar configuración del analizador
+            if optimal_params:
+                self.market_analyzer.update_strategy_parameters(optimal_params)
+
+            # Configurar alertas basadas en resultados del backtest
+            if self.alert_manager:
+                self._setup_backtest_based_alerts(symbol, backtest_results)
+
+            print(ConsoleColors.success("\nEstrategia configurada para trading en vivo"))
+            self._print_strategy_summary(backtest_results)
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error configurando estrategia: {str(e)}"))
+
+    def _suggest_strategy_improvements(self, results: Dict):
+        """
+        Sugiere mejoras basadas en resultados del backtest
+        """
+        try:
+            metrics = results['metrics']
+
+            print(ConsoleColors.info("\nSugerencias de Mejora:"))
+
+            if metrics.get('win_rate', 0) < 0.5:
+                print(ConsoleColors.warning("• Mejorar precisión de señales"))
+                print("  - Ajustar filtros de validación")
+                print("  - Aumentar confirmaciones requeridas")
+
+            if metrics.get('profit_factor', 0) < 2:
+                print(ConsoleColors.warning("• Optimizar gestión de riesgo"))
+                print("  - Ajustar ratios de riesgo/beneficio")
+                print("  - Revisar niveles de take profit")
+
+            if metrics.get('max_drawdown', 0) > 20:
+                print(ConsoleColors.warning("• Reducir drawdown"))
+                print("  - Implementar stops más ajustados")
+                print("  - Reducir tamaño de posiciones")
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error generando sugerencias: {str(e)}"))
+
+    def _print_strategy_summary(self, results: Dict):
+        """
+        Imprime resumen de la estrategia validada
+        """
+        try:
+            metrics = results['metrics']
+            print(ConsoleColors.header("\n=== RESUMEN DE ESTRATEGIA VALIDADA ==="))
+
+            print(ConsoleColors.info("\nMétricas Principales:"))
+            print(f"Win Rate: {metrics.get('win_rate', 0):.2f}%")
+            print(f"Profit Factor: {metrics.get('profit_factor', 0):.2f}")
+            print(f"Sharpe Ratio: {metrics.get('risk_metrics', {}).get('sharpe_ratio', 0):.2f}")
+
+            print(ConsoleColors.info("\nParámetros Optimizados:"))
+            for param, value in results.get('optimal_parameters', {}).items():
+                print(f"{param}: {value}")
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error imprimiendo resumen: {str(e)}"))
+
+    def _setup_backtest_based_alerts(self, symbol: str, backtest_results: Dict):
+        """
+        Configura alertas basadas en resultados del backtest
+        """
+        try:
+            metrics = backtest_results['metrics']
+
+            # Configurar alertas de precio
+            if 'optimal_levels' in backtest_results:
+                levels = backtest_results['optimal_levels']
+                current_price = float(self.client.get_ticker_price(symbol)['price'])
+
+                for level in levels:
+                    self.alert_manager.add_price_alert(
+                        symbol=symbol,
+                        target_price=level['price'],
+                        current_price=current_price,
+                        condition=level['condition'],
+                        additional_info={
+                            'backtest_confidence': metrics.get('overall_score', 0),
+                            'optimal_parameters': backtest_results.get('optimal_parameters', {}),
+                            'level_type': level['type']
+                        }
+                    )
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error configurando alertas: {str(e)}"))
+
 if __name__ == "__main__":
     bot = TradingBot()
     try:
@@ -724,3 +900,26 @@ if __name__ == "__main__":
         print(ConsoleColors.error(f"\nError en ejecución: {str(e)}"))
     finally:
         bot.cleanup()
+# if __name__ == "__main__":
+#     bot = TradingBot()
+#     try:
+#         # Ejecutar backtesting primero
+#         backtest_results = bot.run_backtest(
+#             symbol="BTCUSDT",
+#             start_time="2023-01-01",
+#             end_time="2023-12-31",
+#             initial_capital=10000.0
+#         )
+
+#         # Si el backtest es exitoso, ejecutar el bot
+#         if backtest_results and backtest_results['metrics'].get('overall_score', 0) >= 0.7:
+#             bot.run()
+#         else:
+#             print(ConsoleColors.warning("\nOptimiza la estrategia antes de ejecutar el bot en vivo"))
+
+#     except KeyboardInterrupt:
+#         print(ConsoleColors.warning("\nDetención manual del bot"))
+#     except Exception as e:
+#         print(ConsoleColors.error(f"\nError en ejecución: {str(e)}"))
+#     finally:
+#         bot.cleanup()

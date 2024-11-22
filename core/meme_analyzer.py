@@ -13,7 +13,7 @@ class MemeCoinAnalyzer:
         # Palabras clave mejoradas y categorizadas
         self.meme_keywords = {
             "primary": {
-                "mascots": ["doge", "shib", "pepe", "floki", "inu", "cat", "kitty", "pug", "hamster"],
+                "mascots": ["doge", "shib", "pepe", "floki", "inu", "cat", "kitty", "pug", "mog"],
                 "themes": ["meme", "chad", "wojak", "moon", "rocket", "safe"],
                 "prefixes": ["baby", "mini", "mega", "super"],
                 "trends": ["ai", "gpt", "meta", "web3", "defi"]

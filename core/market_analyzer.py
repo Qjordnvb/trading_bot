@@ -118,13 +118,13 @@ class MarketAnalyzer:
                 },
             },
             "volume": {
-                "min_24h": 500000,  # Volumen mínimo en 24h
-                "min_ratio": 1.5,  # Ratio mínimo respecto al promedio
+                "min_24h": 1000000,  # Aumentar volumen mínimo
+                "min_ratio": 1.2,  # Ratio mínimo respecto al promedio
             },
             "volatility": {
-                "min": 0.02,  # Volatilidad mínima (2%)
-                "max": 0.15,  # Volatilidad máxima (15%)
-                "threshold": 0.08,  # Umbral para decisiones (8%)
+                "min": 0.005,  # Volatilidad mínima (2%)
+                "max": 0.03,  # Volatilidad máxima (15%)
+                "threshold": 0.015,  # Umbral para decisiones (8%)
             },
             "trend": {
                 "min_strength": 0.3,  # Fuerza mínima de tendencia
@@ -271,6 +271,57 @@ class MarketAnalyzer:
                 "reason": "Error en análisis de condiciones de mercado",
                 "data": candlesticks,
             }
+
+    def _evaluate_trading_conditions(self, analysis: Dict, candle: Dict) -> Optional[TradeRecommendation]:
+        try:
+            current_price = float(candle['close'])
+
+            # 1. Validar momentum y tendencia
+            momentum_conditions = (
+                analysis['momentum_1h']['is_positive'] and
+                analysis['momentum_4h']['is_positive']
+            )
+
+            trend_conditions = (
+                analysis['trend_1h'] in [MarketTrend.UPTREND, MarketTrend.STRONG_UPTREND] or
+                analysis['trend_4h'] in [MarketTrend.UPTREND, MarketTrend.STRONG_UPTREND]
+            )
+
+            # 2. Validar volumen
+            volume_conditions = (
+                analysis['volume']['ratio'] > self.strategy_params["volume"]["min_ratio"] or
+                analysis['volume']['is_increasing']
+            )
+
+            # 3. Validar niveles técnicos
+            price_conditions = (
+                current_price > analysis['levels']['support'] * 1.01 and
+                current_price < analysis['levels']['resistance'] * 0.99
+            )
+
+            # Si se cumplen la mayoría de las condiciones
+            conditions_met = sum([
+                momentum_conditions,
+                trend_conditions,
+                volume_conditions,
+                price_conditions
+            ])
+
+            if conditions_met >= 2:  # Reducir de 3 a 2 condiciones necesarias
+                return TradeRecommendation(
+                    signal=TradingSignal.BUY,
+                    strength=SignalStrength.MODERATE if conditions_met == 2 else SignalStrength.STRONG,
+                    reasons=self._generate_trade_reasons(analysis),
+                    entry_price=current_price,
+                    stop_loss=analysis['levels']['support'] * 0.995,
+                    take_profit=analysis['levels']['resistance'] * 1.005
+                )
+
+            return None
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error evaluando condiciones: {str(e)}"))
+            return None
 
     def _extract_validated_candle_data(self, candlesticks: List[Dict]) -> Dict:
         """Extrae y valida datos de las velas"""
@@ -1502,114 +1553,54 @@ class MarketAnalyzer:
                 "timeframes": {},
             }
 
-    # Mantener métodos existentes
     def _analyze_trend(self, candlesticks: List[Dict]) -> MarketTrend:
-        """Analiza la tendencia del mercado"""
+        """Analiza la tendencia del mercado con criterios mejorados"""
         try:
             closes = [float(candle["close"]) for candle in candlesticks]
+            opens = [float(candle["open"]) for candle in candlesticks]
+            highs = [float(candle["high"]) for candle in candlesticks]
+            lows = [float(candle["low"]) for candle in candlesticks]
 
             # Calcular EMAs
             ema20 = self._calculate_ema(closes, 20)
             ema50 = self._calculate_ema(closes, 50)
+            ema200 = self._calculate_ema(closes, 200)
 
-            # Calcular momentum
-            momentum = (closes[-1] - closes[-20]) / closes[-20] * 100
+            # Calcular momentum y volatilidad
+            momentum = ((closes[-1] - closes[-20]) / closes[-20]) * 100
+            volatility = self._calculate_volatility(candlesticks)
+
+            # Analizar estructura de precio
+            higher_highs = all(highs[i] >= highs[i-1] for i in range(-3, 0))
+            higher_lows = all(lows[i] >= lows[i-1] for i in range(-3, 0))
+            lower_highs = all(highs[i] <= highs[i-1] for i in range(-3, 0))
+            lower_lows = all(lows[i] <= lows[i-1] for i in range(-3, 0))
 
             # Determinar tendencia
-            if ema20[-1] > ema50[-1] and momentum > 10:
+            current_price = closes[-1]
+            price_above_emas = current_price > ema20[-1] > ema50[-1] > ema200[-1]
+            price_below_emas = current_price < ema20[-1] < ema50[-1] < ema200[-1]
+
+            # Tendencia alcista fuerte
+            if price_above_emas and higher_highs and higher_lows and momentum > 2:
                 return MarketTrend.STRONG_UPTREND
-            elif ema20[-1] > ema50[-1]:
+            # Tendencia alcista
+            elif price_above_emas and (higher_highs or higher_lows):
                 return MarketTrend.UPTREND
-            elif ema20[-1] < ema50[-1] and momentum < -10:
+            # Tendencia bajista fuerte
+            elif price_below_emas and lower_highs and lower_lows and momentum < -2:
                 return MarketTrend.STRONG_DOWNTREND
-            elif ema20[-1] < ema50[-1]:
+            # Tendencia bajista
+            elif price_below_emas and (lower_highs or lower_lows):
                 return MarketTrend.DOWNTREND
+
             return MarketTrend.NEUTRAL
-
-        except Exception:
-            return MarketTrend.NEUTRAL
-
-    def _analyze_volume(self, candlesticks):
-        """
-        Analiza el patrón de volumen
-        """
-        try:
-            # Validar que candlesticks no sea None y tenga elementos
-            if not candlesticks or len(candlesticks) < 20:
-                return {
-                    "ratio": 1.0,
-                    "is_significant": False,
-                    "is_increasing": False,
-                    "average": 0,
-                    "buy_pressure": 0,
-                }
-
-            # Extraer volúmenes y cierres
-            volumes = []
-            closes = []
-
-            for candle in candlesticks:
-                try:
-                    # Si es una lista/tupla de la API de Binance:
-                    # [timestamp, open, high, low, close, volume, ...]
-                    if isinstance(candle, (list, tuple)):
-                        vol = float(candle[5])  # El volumen está en el índice 5
-                        close = float(candle[4])  # El cierre está en el índice 4
-                        volumes.append(vol)
-                        closes.append(close)
-                except (IndexError, ValueError, TypeError):
-                    continue
-
-            if len(volumes) < 20:
-                return {
-                    "ratio": 1.0,
-                    "is_significant": False,
-                    "is_increasing": False,
-                    "average": 0,
-                    "buy_pressure": 0,
-                }
-
-            # Cálculos de volumen
-            avg_volume = sum(volumes[-20:]) / 20
-            current_volume = volumes[-1]
-            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
-
-            # Calcular presión compradora
-            recent_volumes = volumes[-5:]
-            recent_price_changes = [
-                closes[i] - closes[i - 1] for i in range(len(closes) - 5, len(closes))
-            ]
-
-            buy_volume = sum(
-                vol
-                for vol, change in zip(recent_volumes, recent_price_changes)
-                if change > 0
-            )
-            total_volume = sum(recent_volumes)
-            buy_pressure = buy_volume / total_volume if total_volume > 0 else 0.5
-
-            return {
-                "ratio": volume_ratio,
-                "is_significant": volume_ratio
-                > self.thresholds["volume"]["significant"],
-                "is_increasing": sum(volumes[-3:]) > sum(volumes[-6:-3]),
-                "average": avg_volume,
-                "buy_pressure": buy_pressure,
-            }
 
         except Exception as e:
-            print(f"Error en análisis de volumen: {e}")
-            print(f"Tipo de candlesticks: {type(candlesticks)}")
-            if candlesticks and len(candlesticks) > 0:
-                print(f"Tipo de primera vela: {type(candlesticks[0])}")
-                print(f"Contenido de primera vela: {candlesticks[0]}")
-            return {
-                "ratio": 1.0,
-                "is_significant": False,
-                "is_increasing": False,
-                "average": 0,
-                "buy_pressure": 0,
-            }
+            print(ConsoleColors.error(f"Error en análisis de tendencia: {str(e)}"))
+            return MarketTrend.NEUTRAL
+
+
 
     def _analyze_momentum(self, candlesticks: List[Dict]) -> Dict:
         """Analiza el momentum del precio"""
@@ -2489,6 +2480,46 @@ class MarketAnalyzer:
             ema.append((price * multiplier) + (ema[-1] * (1 - multiplier)))
 
         return ema
+
+    def _analyze_volume(self, candlesticks: List[Dict]) -> Dict:
+        try:
+            if len(candlesticks) < 20:
+                return {
+                    "ratio": 1.0,
+                    "is_significant": False,
+                    "is_increasing": False
+                }
+
+            # Calcular volumen promedio de los últimos 20 periodos
+            volumes = [float(candle["volume"]) for candle in candlesticks[-20:]]
+            avg_volume = sum(volumes[:-1]) / (len(volumes) - 1)  # Excluir volumen actual
+            current_volume = volumes[-1]
+
+            # Calcular ratio de volumen
+            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+
+            # Determinar si el volumen es significativo
+            is_significant = volume_ratio > self.strategy_params["volume"]["min_ratio"]
+
+            # Analizar tendencia del volumen
+            recent_volumes = volumes[-5:]  # últimos 5 periodos
+            is_increasing = sum(recent_volumes[-2:]) > sum(recent_volumes[:2])  # comparar últimos 2 vs primeros 2
+
+            return {
+                "ratio": round(volume_ratio, 2),
+                "is_significant": is_significant,
+                "is_increasing": is_increasing,
+                "current_volume": current_volume,
+                "average_volume": avg_volume
+            }
+
+        except Exception as e:
+            print(ConsoleColors.error(f"Error en análisis de volumen: {str(e)}"))
+            return {
+                "ratio": 1.0,
+                "is_significant": False,
+                "is_increasing": False
+            }
 
     def _calculate_support_resistance(self, candlesticks: List[Dict]) -> Dict:
         """Calcula niveles de soporte y resistencia"""
